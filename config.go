@@ -1,0 +1,208 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/BurntSushi/toml"
+)
+
+// Profile is one Claude Code configuration directory (what CLAUDE_CONFIG_DIR
+// points at). Sessions are discovered from <config_dir>/projects.
+type Profile struct {
+	Name      string `toml:"-"`
+	ConfigDir string `toml:"config_dir"`
+}
+
+// Config is ~/.config/reserva/config.toml.
+type Config struct {
+	DefaultProfile string             `toml:"default_profile"`
+	ClaudeBin      string             `toml:"claude_bin"`
+	ClaudeArgs     []string           `toml:"claude_args"`
+	Terminal       string             `toml:"terminal"`
+	Shell          string             `toml:"shell"`
+	Worktrees      *bool              `toml:"worktrees"`
+	NewTerminal    *bool              `toml:"new_terminal"`
+	Profiles       map[string]Profile `toml:"profiles"`
+
+	// ordered profile names, in config file order
+	order []string
+	path  string
+}
+
+func defaultConfigPath() string {
+	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
+		return filepath.Join(d, "reserva", "config.toml")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "reserva", "config.toml")
+}
+
+func expandHome(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, p[1:])
+	}
+	return p
+}
+
+// loadConfig reads the config file, creating a default one on first run.
+func loadConfig(path string) (*Config, error) {
+	if path == "" {
+		path = defaultConfigPath()
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := writeDefaultConfig(path); err != nil {
+			return nil, err
+		}
+	}
+	var cfg Config
+	meta, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	cfg.path = path
+	if cfg.Profiles == nil {
+		cfg.Profiles = map[string]Profile{}
+	}
+	// Preserve the order profiles are written in the file.
+	seen := map[string]bool{}
+	for _, k := range meta.Keys() {
+		if len(k) == 2 && k[0] == "profiles" && !seen[k[1]] {
+			if _, ok := cfg.Profiles[k[1]]; ok {
+				seen[k[1]] = true
+				cfg.order = append(cfg.order, k[1])
+			}
+		}
+	}
+	for name := range cfg.Profiles {
+		if !seen[name] {
+			cfg.order = append(cfg.order, name)
+		}
+	}
+	for name, p := range cfg.Profiles {
+		p.Name = name
+		p.ConfigDir = expandHome(p.ConfigDir)
+		if p.ConfigDir == "" {
+			return nil, fmt.Errorf("%s: profile %q has no config_dir", path, name)
+		}
+		cfg.Profiles[name] = p
+	}
+	if len(cfg.order) == 0 {
+		return nil, fmt.Errorf("%s: no profiles defined", path)
+	}
+	if cfg.ClaudeBin == "" {
+		cfg.ClaudeBin = "claude"
+	}
+	if cfg.Shell == "" {
+		cfg.Shell = os.Getenv("SHELL")
+		if cfg.Shell == "" {
+			cfg.Shell = "/bin/sh"
+		}
+	}
+	if cfg.Terminal == "" {
+		cfg.Terminal = os.Getenv("TERMINAL")
+	}
+	if cfg.DefaultProfile == "" || cfg.Profiles[cfg.DefaultProfile].ConfigDir == "" {
+		cfg.DefaultProfile = cfg.order[0]
+	}
+	return &cfg, nil
+}
+
+func (c *Config) UseWorktrees() bool {
+	return c.Worktrees == nil || *c.Worktrees
+}
+
+// NewTerminalDefault reports whether enter opens a new terminal window
+// (shift+enter then runs in this one). It is off when no terminal is
+// configured, since spawning one would only fail.
+func (c *Config) NewTerminalDefault() bool {
+	if strings.TrimSpace(c.Terminal) == "" {
+		return false
+	}
+	return c.NewTerminal == nil || *c.NewTerminal
+}
+
+// ProfileNames returns profiles in config-file order.
+func (c *Config) ProfileNames() []string { return c.order }
+
+// discoverConfigDirs finds ~/.claude and ~/.claude-* directories that look
+// like Claude Code config dirs.
+func discoverConfigDirs() []Profile {
+	home, _ := os.UserHomeDir()
+	entries, _ := filepath.Glob(filepath.Join(home, ".claude*"))
+	var out []Profile
+	for _, e := range entries {
+		st, err := os.Stat(e)
+		if err != nil || !st.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(e, "projects")); err != nil {
+			continue
+		}
+		base := filepath.Base(e)
+		name := "default"
+		if strings.HasPrefix(base, ".claude-") {
+			name = strings.TrimPrefix(base, ".claude-")
+		} else if base != ".claude" {
+			continue
+		}
+		out = append(out, Profile{Name: name, ConfigDir: "~/" + base})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == "default" {
+			return true
+		}
+		if out[j].Name == "default" {
+			return false
+		}
+		return out[i].Name < out[j].Name
+	})
+	if len(out) == 0 {
+		out = append(out, Profile{Name: "default", ConfigDir: "~/.claude"})
+	}
+	return out
+}
+
+func writeDefaultConfig(path string) error {
+	profiles := discoverConfigDirs()
+	def := profiles[0].Name
+	if env := os.Getenv("CLAUDE_CONFIG_DIR"); env != "" {
+		for _, p := range profiles {
+			if expandHome(p.ConfigDir) == filepath.Clean(expandHome(env)) {
+				def = p.Name
+			}
+		}
+	}
+	var b strings.Builder
+	b.WriteString("# reserva configuration\n")
+	b.WriteString("# Generated on first run; edit freely.\n\n")
+	fmt.Fprintf(&b, "default_profile = %q\n", def)
+	b.WriteString("\n# Binary used to start Claude Code.\n")
+	b.WriteString("claude_bin = \"claude\"\n")
+	b.WriteString("\n# Extra arguments appended to every claude invocation.\n")
+	b.WriteString("claude_args = []\n")
+	b.WriteString("\n# Terminal emulator used by shift+enter / ctrl+shift+enter.\n")
+	b.WriteString("# Defaults to $TERMINAL. Flags for running a command are added\n")
+	b.WriteString("# automatically for common terminals, or spell them out, e.g.\n")
+	b.WriteString("# terminal = \"wezterm start --\"\n")
+	b.WriteString("terminal = \"\"\n")
+	b.WriteString("\n# enter opens sessions and shells in a new terminal window, and\n")
+	b.WriteString("# shift+enter / ctrl+shift+enter in this one. false swaps them.\n")
+	b.WriteString("new_terminal = true\n")
+	b.WriteString("\n# Shell opened by ctrl+enter (defaults to $SHELL).\n")
+	b.WriteString("shell = \"\"\n")
+	b.WriteString("\n# New sessions are started in a fresh git worktree (claude --worktree).\n")
+	b.WriteString("worktrees = true\n")
+	b.WriteString("\n# One profile per Claude Code config directory (CLAUDE_CONFIG_DIR).\n")
+	for _, p := range profiles {
+		fmt.Fprintf(&b, "\n[profiles.%s]\nconfig_dir = %q\n", p.Name, p.ConfigDir)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
