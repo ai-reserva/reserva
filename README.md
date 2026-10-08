@@ -236,3 +236,7 @@ developed on Linux, though, and macOS has not been tested much. Things to know:
   *Report keys using CSI u* is enabled in the profile's Keys settings.
 - **File locations** follow the Linux (XDG) layout, `~/.config/reserva`
   and `~/.local/state/reserva`, not `~/Library`.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
