@@ -219,11 +219,25 @@ func matches(s *Session, f string) bool {
 }
 
 func (m *model) listHeight() int {
-	h := m.height - 5 // title bar, rule, rule, status, keys
+	h := m.height - 4 - m.statusHeight() // title bar, rule, rule, status, keys
 	if h < 1 {
 		h = 1
 	}
 	return h
+}
+
+// statusHeight is the number of rows the status area takes: one normally,
+// more while a text input has wrapped, but always leaving one row for the list.
+func (m *model) statusHeight() int {
+	n := strings.Count(m.statusView(m.viewWidth()), "\n") + 1
+	return max(1, min(n, m.height-5))
+}
+
+func (m *model) viewWidth() int {
+	if m.width <= 0 {
+		return 80
+	}
+	return m.width
 }
 
 func (m *model) clampCursor() {
@@ -782,10 +796,9 @@ func pad(s string, w int) string {
 
 func (m model) View() tea.View {
 	var b strings.Builder
-	w := m.width
-	if w <= 0 {
-		w = 80
-	}
+	w := m.viewWidth()
+	// A wrapped input line shrinks the list; keep the cursor row in view.
+	m.clampCursor()
 
 	// Title bar with profile tabs.
 	var tabs []string
@@ -816,7 +829,9 @@ func (m model) View() tea.View {
 	}
 
 	b.WriteString(styleRule.Render(strings.Repeat("─", w)) + "\n")
-	b.WriteString(m.statusView(w) + "\n")
+	status := strings.Split(m.statusView(w), "\n")
+	status = status[len(status)-m.statusHeight():] // keep the end, where the cursor is
+	b.WriteString(strings.Join(status, "\n") + "\n")
 	b.WriteString(m.keysView(w))
 
 	v := tea.NewView(b.String())
@@ -935,30 +950,36 @@ func stripStyle(s string) string {
 	return " "
 }
 
+// inputLine renders a prompt followed by a single-line text input and cursor,
+// wrapped onto as many lines of w cells as it needs so all of it stays readable.
+func inputLine(prompt, input string, w int) string {
+	return ansi.Wrap(prompt+input+"▏", w, "-/")
+}
+
 func (m model) statusView(w int) string {
 	switch m.mode {
 	case modeFilter:
-		return " /" + m.input + "▏"
+		return inputLine(" /", m.input, w)
 	case modeRepo:
 		kind := "new session"
 		if m.launchWT {
 			kind = "new worktree session"
 		}
-		return fmt.Sprintf(" %s — repository: %s▏", kind, m.input)
+		return inputLine(fmt.Sprintf(" %s — repository: ", kind), m.input, w)
 	case modeName:
 		kind := "new session"
 		if m.launchWT {
 			kind = "new worktree session"
 		}
-		return fmt.Sprintf(" %s in %s — name (optional): %s▏", kind, shortPath(m.launchIn), m.input)
+		return inputLine(fmt.Sprintf(" %s in %s — name (optional): ", kind, shortPath(m.launchIn)), m.input, w)
 	case modeRename:
-		return " rename session: " + m.input + "▏"
+		return inputLine(" rename session: ", m.input, w)
 	case modeBranch:
 		def := "worktree-<generated>"
 		if m.launchName != "" {
 			def = "worktree-" + m.launchName
 		}
-		return fmt.Sprintf(" worktree %q in %s — branch (empty = %s): %s▏", m.launchName, shortPath(m.launchIn), def, m.input)
+		return inputLine(fmt.Sprintf(" worktree %q in %s — branch (empty = %s): ", m.launchName, shortPath(m.launchIn), def), m.input, w)
 	}
 	if m.status != "" {
 		return " " + truncate(m.status, w-2)
