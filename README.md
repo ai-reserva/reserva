@@ -64,6 +64,15 @@ go build -o reserva .
 mkdir -p ~/.local/bin && mv reserva ~/.local/bin/
 ```
 
+With Nix:
+
+```sh
+nix run git+https://codeberg.org/jpnadas/reserva
+```
+
+`nix develop` in a checkout gives a shell with Go, gopls, golangci-lint and
+delve.
+
 Then run `reserva`. On first run it writes a config file with every
 Claude profile it finds (see [Configuration](#configuration)).
 
