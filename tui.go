@@ -58,6 +58,7 @@ type model struct {
 	profiles   []string
 	profile    int
 	data       map[string]*profileData
+	live       map[string]map[string]liveSession // live sessions per profile, for the tab counts
 	rows       []row
 	cursor     int
 	offset     int
@@ -99,10 +100,12 @@ func newModel(cfg *Config, startProfile string) model {
 		cfg:      cfg,
 		profiles: cfg.ProfileNames(),
 		data:     map[string]*profileData{},
+		live:     map[string]map[string]liveSession{},
 		archive:  loadArchive(defaultStatePath()),
 	}
 	for i, p := range m.profiles {
 		m.data[p] = &profileData{}
+		m.live[p] = loadLive(cfg.Profiles[p].ConfigDir)
 		if p == startProfile {
 			m.profile = i
 		}
@@ -198,6 +201,27 @@ func (m *model) archivedIn(g *Group) int {
 		}
 	}
 	return n
+}
+
+// liveCounts renders the busy and idle session counts of a profile, for its
+// tab in the title bar. Empty when nothing is running there.
+func (m model) liveCounts(profile string) string {
+	busy, idle := 0, 0
+	for _, ls := range m.live[profile] {
+		if ls.Status == "busy" {
+			busy++
+		} else {
+			idle++
+		}
+	}
+	var out string
+	if busy > 0 {
+		out += styleBusy.Render(fmt.Sprintf("●%d", busy)) + " "
+	}
+	if idle > 0 {
+		out += styleIdle.Render(fmt.Sprintf("●%d", idle)) + " "
+	}
+	return out
 }
 
 // archivedTotal counts archived sessions in the current profile.
@@ -502,8 +526,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case liveMsg:
 		for name, pd := range m.data {
+			live := loadLive(m.cfg.Profiles[name].ConfigDir)
+			m.live[name] = live
 			if pd.loaded {
-				applyLive(pd.groups, loadLive(m.cfg.Profiles[name].ConfigDir))
+				applyLive(pd.groups, live)
 			}
 		}
 		return m, liveTick()
@@ -807,7 +833,7 @@ func (m model) View() tea.View {
 		if i == m.profile {
 			tabs = append(tabs, styleTabOn.Render(label))
 		} else {
-			tabs = append(tabs, styleTab.Render(label))
+			tabs = append(tabs, styleTab.Render(label)+m.liveCounts(p))
 		}
 	}
 	bar := styleTitle.Render(" reserva ") + " " + strings.Join(tabs, " ")
@@ -1060,6 +1086,7 @@ func (m model) helpView() string {
 		"               r  reload    ?  help    q  quit",
 		"",
 		"  Marks        ● busy   ● idle   ✗ directory missing   ⎇ worktree",
+		"               ●2 next to a profile tab: sessions running there",
 		"  Config       " + shortPath(m.cfg.path),
 	}
 	if !m.kbOK {
