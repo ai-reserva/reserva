@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,8 +27,15 @@ const (
 
 type row struct {
 	group *Group
-	sess  *Session // nil for a group header
+	sess  *Session // nil for a group header and for MRs without a session
+	mr    *MR      // set for an MR row in the MR view
+	n     int      // count shown on a group header
 }
+
+func (r row) header() bool { return r.sess == nil && r.mr == nil }
+
+// unlinkedGroup heads the open MRs that no visible session claims.
+var unlinkedGroup = &Group{}
 
 type profileData struct {
 	groups  []*Group
@@ -45,6 +53,14 @@ type loadedMsg struct {
 type liveMsg struct{}
 
 type rescanMsg struct{}
+
+type forgeTickMsg struct{}
+
+type mrsMsg struct {
+	profile string
+	mrs     []*MR
+	err     error
+}
 
 type execDoneMsg struct {
 	name    string
@@ -77,6 +93,12 @@ type model struct {
 
 	archive      *archiveState
 	showArchived bool
+
+	mrView  bool             // show only sessions with open MRs, MRs nested
+	mrs     map[string][]*MR // open MRs per profile
+	mrErr   map[string]error // last forge error per profile
+	mrBusy  map[string]bool  // a forge fetch is in flight
+	mrCache *mrCache
 }
 
 var (
@@ -93,6 +115,7 @@ var (
 	styleErr      = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	styleKey      = lipgloss.NewStyle().Bold(true)
 	styleRule     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	styleMR       = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
 )
 
 func newModel(cfg *Config, startProfile string) model {
@@ -102,6 +125,15 @@ func newModel(cfg *Config, startProfile string) model {
 		data:     map[string]*profileData{},
 		live:     map[string]map[string]liveSession{},
 		archive:  loadArchive(defaultStatePath()),
+		mrs:      map[string][]*MR{},
+		mrErr:    map[string]error{},
+		mrBusy:   map[string]bool{},
+		mrCache:  loadMRCache(defaultMRCachePath()),
+	}
+	for p, mrs := range m.mrCache.Profiles {
+		if len(cfg.Profiles[p].Forges) > 0 {
+			m.mrs[p] = mrs
+		}
 	}
 	for i, p := range m.profiles {
 		m.data[p] = &profileData{}
@@ -133,21 +165,149 @@ func rescanTick() tea.Cmd {
 	return tea.Tick(10*time.Second, func(time.Time) tea.Msg { return rescanMsg{} })
 }
 
+func forgeTick() tea.Cmd {
+	return tea.Tick(2*time.Minute, func(time.Time) tea.Msg { return forgeTickMsg{} })
+}
+
+// fetchMRsCmd asks a profile's forges for its open MRs in the background.
+func (m model) fetchMRsCmd(name string) tea.Cmd {
+	forges := m.cfg.Profiles[name].Forges
+	if len(forges) == 0 || m.mrBusy[name] {
+		return nil
+	}
+	m.mrBusy[name] = true
+	return func() tea.Msg {
+		mrs, err := fetchOpenMRs(forges)
+		return mrsMsg{profile: name, mrs: mrs, err: err}
+	}
+}
+
+func (m model) fetchAllMRsCmd() tea.Cmd {
+	var cmds []tea.Cmd
+	for _, p := range m.profiles {
+		cmds = append(cmds, m.fetchMRsCmd(p))
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m model) hasForges() bool {
+	for _, p := range m.profiles {
+		if len(m.cfg.Profiles[p].Forges) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (m model) Init() tea.Cmd {
 	m.pd().loading = true
-	return tea.Batch(m.loadCmd(m.profiles[m.profile]), liveTick(), rescanTick())
+	return tea.Batch(m.loadCmd(m.profiles[m.profile]), liveTick(), rescanTick(), m.fetchAllMRsCmd(), forgeTick())
 }
 
 // rebuildRows flattens groups into the visible list, applying the filter.
 func (m *model) rebuildRows() {
-	var sel *Session
-	var selRepo string
+	var sel row
 	if m.cursor < len(m.rows) {
-		sel = m.rows[m.cursor].sess
-		selRepo = m.rows[m.cursor].group.Repo
+		sel = m.rows[m.cursor]
 	}
 	m.rows = m.rows[:0]
 	f := strings.ToLower(m.filter)
+	if m.mrView {
+		m.buildMRRows(f)
+	} else {
+		m.buildSessionRows(f)
+	}
+	// Try to keep the cursor on the same item (or, leaving the MR view, on
+	// the MR's session), else on the first session.
+	m.cursor = -1
+	for _, want := range []row{sel, {group: sel.group, sess: sel.sess}} {
+		for i, r := range m.rows {
+			if sameRow(r, want) {
+				m.cursor = i
+				break
+			}
+		}
+		if m.cursor >= 0 || sel.mr == nil {
+			break
+		}
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+		for i, r := range m.rows {
+			if !r.header() {
+				m.cursor = i
+				break
+			}
+		}
+	}
+	m.clampCursor()
+}
+
+func sameRow(r, want row) bool {
+	switch {
+	case want.mr != nil:
+		return r.mr != nil && r.mr.URL == want.mr.URL &&
+			(r.sess == nil) == (want.sess == nil) && (r.sess == nil || r.sess.ID == want.sess.ID)
+	case want.sess != nil:
+		return r.mr == nil && r.sess != nil && r.sess.ID == want.sess.ID
+	case want.group != nil && want.group.Repo != "":
+		return r.header() && r.group.Repo == want.group.Repo
+	}
+	return false
+}
+
+// buildMRRows lists only sessions with open MRs, each followed by its MRs,
+// then the open MRs that no visible session claims.
+func (m *model) buildMRRows(f string) {
+	claimed := map[*MR]bool{}
+	for _, g := range m.pd().groups {
+		start := len(m.rows)
+		m.rows = append(m.rows, row{group: g})
+		inGroup := map[*MR]bool{}
+		for _, s := range g.Sessions {
+			if len(s.MRs) == 0 || s.Archived && !m.showArchived {
+				continue
+			}
+			for _, mr := range s.MRs {
+				claimed[mr] = true
+			}
+			if f != "" && !matches(s, f) && !slices.ContainsFunc(s.MRs, func(mr *MR) bool { return mrMatches(mr, f) }) {
+				continue
+			}
+			m.rows = append(m.rows, row{group: g, sess: s})
+			for _, mr := range s.MRs {
+				m.rows = append(m.rows, row{group: g, sess: s, mr: mr})
+				inGroup[mr] = true
+			}
+		}
+		if len(inGroup) == 0 {
+			m.rows = m.rows[:start]
+			continue
+		}
+		m.rows[start].n = len(inGroup)
+	}
+	start := len(m.rows)
+	m.rows = append(m.rows, row{group: unlinkedGroup})
+	for _, mr := range m.mrs[m.profiles[m.profile]] {
+		if !claimed[mr] && (f == "" || mrMatches(mr, f)) {
+			m.rows = append(m.rows, row{group: unlinkedGroup, mr: mr})
+		}
+	}
+	if len(m.rows) == start+1 {
+		m.rows = m.rows[:start]
+	} else {
+		m.rows[start].n = len(m.rows) - start - 1
+	}
+}
+
+func mrMatches(mr *MR, f string) bool {
+	return strings.Contains(strings.ToLower(mr.Title), f) ||
+		strings.Contains(strings.ToLower(mr.Ref), f) ||
+		strings.Contains(strings.ToLower(mr.Project), f) ||
+		strings.Contains(strings.ToLower(mr.SourceBranch), f)
+}
+
+func (m *model) buildSessionRows(f string) {
 	for _, g := range m.pd().groups {
 		var keep []*Session
 		for _, s := range g.Sessions {
@@ -163,33 +323,15 @@ func (m *model) rebuildRows() {
 				continue
 			}
 		}
-		m.rows = append(m.rows, row{group: g})
+		n := len(g.Sessions)
+		if !m.showArchived {
+			n -= m.archivedIn(g)
+		}
+		m.rows = append(m.rows, row{group: g, n: n})
 		for _, s := range keep {
 			m.rows = append(m.rows, row{group: g, sess: s})
 		}
 	}
-	// Try to keep the cursor on the same item, else on the first session.
-	m.cursor = -1
-	for i, r := range m.rows {
-		if sel != nil && r.sess != nil && r.sess.ID == sel.ID {
-			m.cursor = i
-			break
-		}
-		if sel == nil && selRepo != "" && r.sess == nil && r.group.Repo == selRepo {
-			m.cursor = i
-			break
-		}
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
-		for i, r := range m.rows {
-			if r.sess != nil {
-				m.cursor = i
-				break
-			}
-		}
-	}
-	m.clampCursor()
 }
 
 // archivedIn counts the archived sessions of a group.
@@ -347,7 +489,7 @@ func (m model) where(alt bool) string {
 func (m *model) openClaude(newTerm bool) tea.Cmd {
 	g, s := m.selected()
 	if s == nil {
-		if g == nil {
+		if g == nil || g == unlinkedGroup {
 			return nil
 		}
 		return m.startNew(m.cfg.UseWorktrees())
@@ -509,6 +651,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			pd.groups = msg.groups
 			m.archive.apply(pd.groups)
+			applyMRs(pd.groups, m.mrs[msg.profile])
 		}
 		if msg.profile == m.profiles[m.profile] {
 			m.rebuildRows()
@@ -523,6 +666,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.loadCmd(m.profiles[m.profile]), rescanTick())
 		}
 		return m, rescanTick()
+
+	case forgeTickMsg:
+		return m, tea.Batch(m.fetchAllMRsCmd(), forgeTick())
+
+	case mrsMsg:
+		m.mrBusy[msg.profile] = false
+		m.mrErr[msg.profile] = msg.err
+		// On a failure keep the last good set rather than a partial one.
+		if msg.err != nil {
+			return m, nil
+		}
+		m.mrs[msg.profile] = msg.mrs
+		m.mrCache.Profiles[msg.profile] = msg.mrs
+		if err := m.mrCache.save(); err != nil {
+			m.status = styleErr.Render("saving MR cache: " + err.Error())
+		}
+		if pd := m.data[msg.profile]; pd.loaded {
+			applyMRs(pd.groups, msg.mrs)
+		}
+		if msg.profile == m.profiles[m.profile] {
+			m.rebuildRows()
+		}
+		return m, nil
 
 	case liveMsg:
 		for name, pd := range m.data {
@@ -685,10 +851,20 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if i < len(m.profiles) {
 			return m, m.switchProfile(i - m.profile)
 		}
-	case "enter", "o":
-		return m, m.openClaude(m.cfg.NewTerminalDefault())
-	case "shift+enter", "alt+enter", "O", "shift+o":
-		return m, m.openClaude(!m.cfg.NewTerminalDefault())
+	case "enter", "o", "shift+enter", "alt+enter", "O", "shift+o":
+		if mr := m.selectedMR(); mr != nil {
+			m.openMR(mr)
+			return m, nil
+		}
+		alt := key != "enter" && key != "o"
+		return m, m.openClaude(m.cfg.NewTerminalDefault() != alt)
+	case "m":
+		if !m.hasForges() {
+			m.status = "no forges configured; add forges to a profile in " + shortPath(m.cfg.path)
+			return m, nil
+		}
+		m.mrView = !m.mrView
+		m.rebuildRows()
 	case "ctrl+enter", "t":
 		return m, m.openShell(m.cfg.NewTerminalDefault())
 	case "ctrl+shift+enter", "ctrl+alt+enter", "T", "shift+t":
@@ -727,18 +903,35 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "r":
 		pd := m.pd()
+		fetch := m.fetchMRsCmd(m.profiles[m.profile])
 		if !pd.loading {
 			pd.loading = true
-			return m, m.loadCmd(m.profiles[m.profile])
+			return m, tea.Batch(m.loadCmd(m.profiles[m.profile]), fetch)
 		}
+		return m, fetch
 	}
 	return m, nil
+}
+
+func (m model) selectedMR() *MR {
+	if m.cursor >= len(m.rows) || len(m.rows) == 0 {
+		return nil
+	}
+	return m.rows[m.cursor].mr
+}
+
+func (m *model) openMR(mr *MR) {
+	if err := openURL(mr.URL); err != nil {
+		m.status = styleErr.Render("opening " + mr.URL + ": " + err.Error())
+		return
+	}
+	m.status = "opened " + mr.Ref + " " + mr.Title
 }
 
 func (m *model) jumpGroup(dir int) {
 	i := m.cursor + dir
 	for i >= 0 && i < len(m.rows) {
-		if m.rows[i].sess == nil {
+		if m.rows[i].header() {
 			m.cursor = i
 			m.clampCursor()
 			return
@@ -830,13 +1023,24 @@ func (m model) View() tea.View {
 	var tabs []string
 	for i, p := range m.profiles {
 		label := fmt.Sprintf(" %d:%s ", i+1, p)
+		var tab string
 		if i == m.profile {
-			tabs = append(tabs, styleTabOn.Render(label))
+			tab = styleTabOn.Render(label)
 		} else {
-			tabs = append(tabs, styleTab.Render(label)+m.liveCounts(p))
+			tab = styleTab.Render(label) + m.liveCounts(p)
 		}
+		if m.mrErr[p] != nil {
+			tab += styleErr.Render("mr?")
+		}
+		tabs = append(tabs, tab)
 	}
 	bar := styleTitle.Render(" reserva ") + " " + strings.Join(tabs, " ")
+	if m.mrView {
+		bar += "  " + styleHeaderOn.Render(fmt.Sprintf(" %d open MRs ", len(m.mrs[m.profiles[m.profile]])))
+		if err := m.mrErr[m.profiles[m.profile]]; err != nil {
+			bar += " " + styleErr.Render(err.Error())
+		}
+	}
 	if n := m.archivedTotal(); n > 0 {
 		hint := fmt.Sprintf("%d archived hidden (A shows)", n)
 		if m.showArchived {
@@ -882,7 +1086,16 @@ func (m model) listView(w int) string {
 	}
 	if len(m.rows) == 0 {
 		msg := "  no sessions in " + shortPath(m.current().ConfigDir)
-		if m.filter != "" {
+		switch {
+		case m.mrView && len(m.current().Forges) == 0:
+			msg = "  no forges configured for this profile (m goes back)"
+		case m.mrView && m.filter != "":
+			msg = "  no open MRs match " + m.filter
+		case m.mrView && m.mrBusy[m.profiles[m.profile]] && m.mrs[m.profiles[m.profile]] == nil:
+			msg = "  asking the forges for open MRs…"
+		case m.mrView:
+			msg = "  no open MRs (m goes back)"
+		case m.filter != "":
 			msg = "  no sessions match " + m.filter
 		}
 		b.WriteString(styleDim.Render(msg))
@@ -905,14 +1118,13 @@ func (m model) listView(w int) string {
 	for i := m.offset; i < end; i++ {
 		r := m.rows[i]
 		on := i == m.cursor
-		if r.sess == nil {
-			n := len(r.group.Sessions)
-			if !m.showArchived {
-				n -= m.archivedIn(r.group)
-			}
+		if r.header() {
 			label := fmt.Sprintf(" %s", shortPath(r.group.Repo))
-			count := fmt.Sprintf(" %d", n)
-			if n == 0 {
+			if r.group == unlinkedGroup {
+				label = " open MRs without a session"
+			}
+			count := fmt.Sprintf(" %d", r.n)
+			if r.n == 0 {
 				count = " no sessions yet"
 			}
 			line := pad(truncate(label, w-lipgloss.Width(count)-1)+styleDim.Render(count), w)
@@ -922,6 +1134,10 @@ func (m model) listView(w int) string {
 				line = styleHeader.Render(truncate(label, w-len(count)-1)) + styleDim.Render(count)
 			}
 			b.WriteString(line + "\n")
+			continue
+		}
+		if r.mr != nil {
+			b.WriteString(m.mrLine(r, on, w, titleW, branchW, timeW) + "\n")
 			continue
 		}
 		s := r.sess
@@ -948,7 +1164,25 @@ func (m model) listView(w int) string {
 		if s.Archived {
 			titleText += "  [archived]"
 		}
-		title := pad(truncate(titleText, titleW), titleW)
+		// In the session list, a session's newest open MR is marked at the
+		// end of its title; the MR view lists them under it instead.
+		mrMark := ""
+		if !m.mrView && len(s.MRs) > 0 {
+			mrMark = s.MRs[0].Ref
+			if len(s.MRs) > 1 {
+				mrMark += fmt.Sprintf("+%d", len(s.MRs)-1)
+			}
+		}
+		tw := titleW
+		if mrMark != "" {
+			tw -= len(mrMark) + 1
+		}
+		title := pad(truncate(titleText, tw), tw)
+		titleStyled := styleRow.Render(title)
+		if mrMark != "" {
+			title += " " + mrMark
+			titleStyled += " " + styleMR.Render(mrMark)
+		}
 		branch = pad(truncate(branch, branchW), branchW)
 		when := fmt.Sprintf("%*s", timeW, relTime(s.Modified))
 		body := fmt.Sprintf("%s  %s %s", title, branch, when)
@@ -957,13 +1191,51 @@ func (m model) listView(w int) string {
 		} else if s.Missing || s.Archived {
 			b.WriteString("  " + mark + " " + styleDim.Render(body) + "\n")
 		} else {
-			b.WriteString("  " + mark + " " + styleRow.Render(title) + "  " + styleDim.Render(branch+" "+when) + "\n")
+			b.WriteString("  " + mark + " " + titleStyled + "  " + styleDim.Render(branch+" "+when) + "\n")
 		}
 	}
 	for i := end - m.offset; i < h; i++ {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// mrLine renders an MR row of the MR view, indented under its session, in
+// the same columns as sessions: reference and title, merge status, age.
+func (m model) mrLine(r row, on bool, w, titleW, branchW, timeW int) string {
+	mr := r.mr
+	const refW = 6
+	textW := max(titleW-2-refW-1, 4)
+	text := mr.Title
+	if !strings.EqualFold(mr.Project, r.group.Project) {
+		text += "  (" + mr.Project + ")"
+	}
+	ref := pad(mr.Ref, refW)
+	text = pad(truncate(text, textW), textW)
+	tag, tagStyle := mrTag(mr)
+	tag = truncate(tag, branchW)
+	when := fmt.Sprintf("%*s", timeW, relTime(mr.Updated))
+	if on {
+		return "    └ " + styleRowOn.Render(pad(ref+" "+text+"  "+pad(tag, branchW)+" "+when, w-6))
+	}
+	if tag != "" {
+		tag = tagStyle.Render(tag)
+	}
+	return styleDim.Render("    └ ") + styleMR.Render(ref) + " " + text + "  " + pad(tag, branchW) + " " + styleDim.Render(when)
+}
+
+// mrTag is the short merge status shown next to an MR, with its style.
+func mrTag(mr *MR) (string, lipgloss.Style) {
+	if mr.Draft {
+		return "draft", styleDim
+	}
+	switch mr.Status {
+	case "mergeable":
+		return mr.Status, styleBusy
+	case "conflicts", "needs rebase":
+		return mr.Status, styleErr
+	}
+	return mr.Status, styleIdle
 }
 
 func stripStyle(s string) string {
@@ -1010,6 +1282,9 @@ func (m model) statusView(w int) string {
 	if m.status != "" {
 		return " " + truncate(m.status, w-2)
 	}
+	if mr := m.selectedMR(); mr != nil {
+		return " " + truncate(mr.URL+"  "+styleDim.Render("⎇ "+mr.SourceBranch), w-2)
+	}
 	_, s := m.selected()
 	if s != nil {
 		detail := shortPath(s.CWD)
@@ -1055,12 +1330,23 @@ func (m model) keysView(w int) string {
 		parts = []string{k("esc", "back")}
 	default:
 		alt := m.where(true)
-		if m.kbOK {
+		switch {
+		case m.selectedMR() != nil && m.kbOK:
+			parts = []string{k("⏎", "open MR"), k("^⏎", "shell"), k("^⇧⏎", "shell "+alt)}
+		case m.selectedMR() != nil:
+			parts = []string{k("o", "open MR"), k("t", "shell"), k("T", "shell "+alt)}
+		case m.kbOK:
 			parts = []string{k("⏎", "claude"), k("⇧⏎", "claude "+alt), k("^⏎", "shell"), k("^⇧⏎", "shell "+alt)}
-		} else {
+		default:
 			parts = []string{k("o", "claude"), k("O", "claude "+alt), k("t", "shell"), k("T", "shell "+alt)}
 		}
-		parts = append(parts, k("n", "new"), k("a", "archive"), k("h/l", "profile"), k("/", "filter"), k("?", "help"), k("q", "quit"))
+		parts = append(parts, k("n", "new"), k("a", "archive"))
+		if m.mrView {
+			parts = append(parts, k("m", "sessions"))
+		} else if m.hasForges() {
+			parts = append(parts, k("m", "MRs"))
+		}
+		parts = append(parts, k("h/l", "profile"), k("/", "filter"), k("?", "help"), k("q", "quit"))
 	}
 	return " " + truncate(strings.Join(parts, "  "), w-1)
 }
@@ -1082,11 +1368,15 @@ func (m model) helpView() string {
 		"                  (empty = worktree-<name>); N uses the opposite worktree setting",
 		"                  in the last prompt: enter starts it " + m.where(false) + ", shift+enter " + m.where(true),
 		"",
-		"  Other        a  archive/unarchive    A  show archived    R  rename    /  filter",
-		"               r  reload    ?  help    q  quit",
+		"  MRs          m  toggle the MR view: sessions with open MRs on the profile's forges,",
+		"                  each MR nested under its session; enter opens the MR in the browser,",
+		"                  the other keys act on its session",
 		"",
-		"  Marks        ● busy   ● idle   ✗ directory missing   ⎇ worktree",
-		"               ●2 next to a profile tab: sessions running there",
+		"  Other        a  archive/unarchive    A  show archived    R  rename    /  filter",
+		"               r  reload (and refetch MRs)    ?  help    q  quit",
+		"",
+		"  Marks        ● busy   ● idle   ✗ directory missing   ⎇ worktree   !12 open MR (+n more)",
+		"               ●2 next to a profile tab: sessions running there; mr? forge fetch failed",
 		"  Config       " + shortPath(m.cfg.path),
 	}
 	if !m.kbOK {

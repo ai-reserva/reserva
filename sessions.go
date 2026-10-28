@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -26,8 +27,10 @@ type Session struct {
 	Title      string
 	LastPrompt string
 	Modified   time.Time
-	Missing    bool // CWD no longer exists
-	Archived   bool // hidden from the main list (reserva state)
+	Missing    bool     // CWD no longer exists
+	Archived   bool     // hidden from the main list (reserva state)
+	PRLinks    []string // MR/PR URLs claude recorded for this session
+	MRs        []*MR    // open MRs on a forge that belong to this session
 
 	// live state from <config_dir>/sessions/*.json
 	Running bool
@@ -38,6 +41,7 @@ type Session struct {
 // Group is all sessions that belong to one repository / directory.
 type Group struct {
 	Repo     string
+	Project  string // forge project path, from the origin remote
 	Sessions []*Session
 	Latest   time.Time
 }
@@ -51,6 +55,7 @@ type jsonlLine struct {
 	AITitle     string `json:"aiTitle"`
 	CustomTitle string `json:"customTitle"`
 	LastPrompt  string `json:"lastPrompt"`
+	PRURL       string `json:"prUrl"`
 	Message     *struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -170,7 +175,8 @@ func parseSession(profile, path string) *Session {
 			if !bytes.Contains(probe, []byte(`"type":"user"`)) &&
 				!bytes.Contains(probe, []byte(`"type":"ai-title"`)) &&
 				!bytes.Contains(probe, []byte(`"type":"custom-title"`)) &&
-				!bytes.Contains(probe, []byte(`"type":"last-prompt"`)) {
+				!bytes.Contains(probe, []byte(`"type":"last-prompt"`)) &&
+				!bytes.Contains(probe, []byte(`"type":"pr-link"`)) {
 				continue
 			}
 			var l jsonlLine
@@ -185,6 +191,10 @@ func parseSession(profile, path string) *Session {
 			case "custom-title":
 				if l.CustomTitle != "" {
 					customTitle = l.CustomTitle
+				}
+			case "pr-link":
+				if l.PRURL != "" && !slices.Contains(s.PRLinks, l.PRURL) {
+					s.PRLinks = append(s.PRLinks, l.PRURL)
 				}
 			case "last-prompt":
 				if l.LastPrompt != "" {
@@ -346,6 +356,7 @@ func loadProfile(p Profile) ([]*Group, error) {
 		sort.Slice(g.Sessions, func(i, j int) bool {
 			return g.Sessions[i].Modified.After(g.Sessions[j].Modified)
 		})
+		g.Project = remoteProject(g.Repo)
 		groups = append(groups, g)
 	}
 	sort.Slice(groups, func(i, j int) bool {

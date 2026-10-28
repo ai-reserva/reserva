@@ -13,8 +13,9 @@ import (
 // Profile is one Claude Code configuration directory (what CLAUDE_CONFIG_DIR
 // points at). Sessions are discovered from <config_dir>/projects.
 type Profile struct {
-	Name      string `toml:"-"`
-	ConfigDir string `toml:"config_dir"`
+	Name      string  `toml:"-"`
+	ConfigDir string  `toml:"config_dir"`
+	Forges    []Forge `toml:"forges"` // where this profile's open MRs are fetched from
 }
 
 // Config is ~/.config/reserva/config.toml.
@@ -88,6 +89,11 @@ func loadConfig(path string) (*Config, error) {
 		p.ConfigDir = expandHome(p.ConfigDir)
 		if p.ConfigDir == "" {
 			return nil, fmt.Errorf("%s: profile %q has no config_dir", path, name)
+		}
+		for i := range p.Forges {
+			if err := p.Forges[i].validate(); err != nil {
+				return nil, fmt.Errorf("%s: profile %q: %w", path, name, err)
+			}
 		}
 		cfg.Profiles[name] = p
 	}
@@ -198,6 +204,8 @@ func writeDefaultConfig(path string) error {
 	b.WriteString("\n# New sessions are started in a fresh git worktree (claude --worktree).\n")
 	b.WriteString("worktrees = true\n")
 	b.WriteString("\n# One profile per Claude Code config directory (CLAUDE_CONFIG_DIR).\n")
+	b.WriteString("# Add forges to a profile to see its open merge requests (m), e.g.\n")
+	b.WriteString("# forges = [{ kind = \"gitlab\", host = \"gitlab.com\" }]\n")
 	for _, p := range profiles {
 		fmt.Fprintf(&b, "\n[profiles.%s]\nconfig_dir = %q\n", p.Name, p.ConfigDir)
 	}

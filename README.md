@@ -34,6 +34,8 @@ to be sent on. Here they are your Claude sessions.
 - Start new sessions in a fresh git worktree, with a branch name of your
   choosing.
 - Rename, archive and filter sessions.
+- Optionally, the open merge requests on GitLab or Gitea that belong to each
+  session (see [Merge requests](#merge-requests)).
 - Reads Claude's files; the only write is a rename record (see
   [Configuration](#configuration)).
 
@@ -43,6 +45,8 @@ to be sent on. Here they are your Claude sessions.
 - [Go](https://go.dev/dl/) 1.26 or newer, to build it.
 - The [`claude` CLI](https://docs.claude.com/en/docs/claude-code) on your `PATH`.
 - `git`, for worktree sessions.
+- Optionally [`glab`](https://gitlab.com/gitlab-org/cli) or
+  [`tea`](https://gitea.com/gitea/tea), logged in, for merge requests.
 
 ## Install
 
@@ -95,7 +99,8 @@ Navigation is vim-style.
 | `a` | archive or unarchive the selected session |
 | `A` | show or hide archived sessions |
 | `/` | filter sessions by title, prompt, branch or path |
-| `r` | reload |
+| `m` | toggle the [merge request](#merge-requests) view |
+| `r` | reload (and refetch merge requests) |
 | `?` | help |
 | `q` | quit |
 
@@ -183,6 +188,48 @@ are read from `<config_dir>/projects/*/*.jsonl`; running sessions are detected
 from `<config_dir>/sessions/*.json` and marked with a dot (green busy, yellow
 idle).
 
+### Merge requests
+
+Give a profile one or more forges and reserva shows the open merge requests
+(GitLab) or pull requests (Gitea, Forgejo, Codeberg) that belong to its
+sessions:
+
+```toml
+[profiles.work]
+config_dir = "~/.claude-work"
+forges = [{ kind = "gitlab", host = "gitlab.com" }]
+
+[profiles.personal]
+config_dir = "~/.claude-personal"
+forges = [{ kind = "gitea", host = "gitea.example.com", scopes = ["author"] }]
+```
+
+| Key | Meaning |
+| --- | --- |
+| `kind` | `gitlab` (queried with `glab api`) or `gitea` (with `tea api`) |
+| `host` | the forge's host name |
+| `login` | optional: the `tea` login to use (defaults to `host`), or a `GLAB_CONFIG_DIR` for `glab` |
+| `scopes` | which open MRs to fetch: any of `author`, `assignee`, `reviewer`; default `["author", "assignee"]` |
+
+reserva never handles tokens; it runs the forge's CLI, so log in with
+`glab auth login` or `tea login add` first. MRs are fetched in the background
+at startup, every two minutes and on `r`, and the last result is cached in
+`~/.local/state/reserva/mrs.json` so it shows up straight away. If a fetch
+fails, the profile's tab gets a red `mr?` and the last good set stays.
+Without forges, reserva makes no network requests at all.
+
+An MR belongs to a session when Claude Code recorded a link to it in the
+session (it does this when it creates or works on an MR with `glab` or `gh`),
+or when the session's branch is the MR's source branch in the project of the
+repository's `origin` remote. The newest one is marked after the session's
+title, as `!123` (`+n` when there are more).
+
+`m` switches to the MR view: only sessions with open MRs, each followed by
+its MRs with their merge status (draft, mergeable, needs approval, conflicts,
+…), and at the bottom the open MRs no session claims. `enter` on an MR opens
+it in the browser; the shell, rename and archive keys act on its session.
+`/` filters by MR title, reference, project and branch too.
+
 ### New-window terminal
 
 New windows are started with the terminal named
@@ -205,7 +252,8 @@ Renaming appends a `custom-title` line to the session's file, the same
 record Claude Code writes for `/rename` and `--name`, so the new name also
 shows up in Claude's own `/resume` picker. Custom titles take precedence over
 the AI-generated title in the list. That is the only write reserva makes
-to Claude's directories.
+to Claude's directories. Its own state (archived sessions, the merge request
+cache) lives under `~/.local/state/reserva/`.
 
 ### Flags
 
