@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -14,8 +15,17 @@ import (
 )
 
 // claudeEnv returns the environment for running claude under a profile.
+// ~/.claude is claude's own default, and setting CLAUDE_CONFIG_DIR to it
+// moves the state file from ~/.claude.json to ~/.claude/.claude.json.
 func claudeEnv(p Profile) []string {
-	return append(os.Environ(), "CLAUDE_CONFIG_DIR="+p.ConfigDir)
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=")
+	})
+	home, _ := os.UserHomeDir()
+	if filepath.Clean(p.ConfigDir) == filepath.Join(home, ".claude") {
+		return env
+	}
+	return append(env, "CLAUDE_CONFIG_DIR="+p.ConfigDir)
 }
 
 // claudeArgv builds the claude command line.
