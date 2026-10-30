@@ -1360,7 +1360,7 @@ func (m model) helpView() string {
 		"               shift+enter       resume claude code " + pad(m.where(true), 22) + "(or: O)",
 		"               ctrl+enter        shell in the worktree, " + pad(m.where(false), 18) + "(or: t)",
 		"               ctrl+shift+enter  shell in the worktree, " + pad(m.where(true), 18) + "(or: T)",
-		"               enter on a running session focuses its window (niri)",
+		"               enter on a running session focuses its window (niri, Terminal.app)",
 		"               enter on a project header starts a new session there",
 		"",
 		"  New          n  new session: asks for a repository (tab completes, prefilled with",

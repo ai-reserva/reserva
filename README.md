@@ -127,13 +127,19 @@ cannot tell `shift+enter` and `ctrl+enter` apart from `enter`. There `o`, `O`,
 
 `enter` or `shift+enter` on a session marked as running does not start a
 second Claude on the same conversation. Instead reserva focuses the
-window that session is running in, found by walking up from the Claude
-process to the terminal that owns a window. This needs the
-[niri](https://github.com/YaLTeR/niri) compositor and a terminal that runs
-one process per window (Alacritty, kitty, foot, …; not daemon modes such as
-`alacritty msg create-window`). Sessions inside tmux or screen cannot be
-traced to a window. When no window is found, the status bar says so and
-nothing is started.
+window that session is running in. When no window is found, the status bar
+says so and nothing is started.
+
+On Linux this needs the [niri](https://github.com/YaLTeR/niri) compositor
+and a terminal that runs one process per window (Alacritty, kitty, foot, …;
+not daemon modes such as `alacritty msg create-window`). The window is
+found by walking up from the Claude process to the terminal that owns a
+window, so sessions inside tmux or screen cannot be traced.
+
+On macOS this works for sessions running in Terminal.app. The tab is found
+by the tty of the Claude process and selected through AppleScript, so
+shells and tmux in between do not matter. Other terminals are not
+supported.
 
 ## Worktrees
 
@@ -284,9 +290,10 @@ developed on Linux, though, and macOS has not been tested much. Things to know:
 
   The `ghostty` CLI on macOS cannot open windows with a command, so Ghostty
   is not supported for new windows either. Jumping to a running session's
-  window is niri-only, so on macOS `enter` on a running session just reports
-  that it is running. Everything that runs in the current terminal works in
-  any terminal.
+  window works for sessions in Terminal.app only (see
+  [Jumping to running sessions](#jumping-to-running-sessions)); in other
+  terminals `enter` on a running session just reports that it is running.
+  Everything that runs in the current terminal works in any terminal.
 - **Modifier keys.** Terminal.app does not support the kitty keyboard
   protocol, so use `o` / `O` / `t` / `T` instead of the `shift`/`ctrl` +
   `enter` combinations. In iTerm2 the combinations work once

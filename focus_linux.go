@@ -13,7 +13,7 @@ import (
 // focusWindowOf brings the window hosting process pid to the front. It finds
 // the window by walking up pid's ancestors until one of them owns a window,
 // which works for terminals that run one process per window (alacritty -e,
-// kitty, foot, ...). Only niri on Linux is supported.
+// kitty, foot, ...). Only niri is supported on Linux.
 func focusWindowOf(pid int) error {
 	if os.Getenv("NIRI_SOCKET") == "" {
 		return errors.New("window focusing needs niri")
@@ -48,7 +48,7 @@ func focusWindowOf(pid int) error {
 	return fmt.Errorf("no window found for pid %d", pid)
 }
 
-// parentPID reads the parent of pid from /proc (Linux only).
+// parentPID reads the parent of pid from /proc.
 func parentPID(pid int) (int, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
