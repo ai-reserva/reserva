@@ -17,7 +17,8 @@ import (
 	"time"
 )
 
-// MR is an open merge request (GitLab) or pull request (Gitea) on a forge.
+// MR is an open merge request (GitLab) or pull request (GitHub, Gitea) on a
+// forge.
 type MR struct {
 	URL          string    `json:"url"`
 	Project      string    `json:"project"` // owner/repo path on the forge
@@ -32,9 +33,9 @@ type MR struct {
 // Forge is one forge a profile's merge requests are fetched from, through the
 // forge's own CLI so reserva never handles tokens.
 type Forge struct {
-	Kind   string   `toml:"kind"`  // gitlab (glab) or gitea (tea)
+	Kind   string   `toml:"kind"`  // gitlab (glab), github (gh) or gitea (tea)
 	Host   string   `toml:"host"`  // e.g. gitlab.com
-	Login  string   `toml:"login"` // tea login name; GLAB_CONFIG_DIR for glab
+	Login  string   `toml:"login"` // tea login name; GLAB_CONFIG_DIR / GH_CONFIG_DIR for glab / gh
 	Scopes []string `toml:"scopes"`
 }
 
@@ -43,9 +44,9 @@ var forgeScopes = []string{"author", "assignee", "reviewer"}
 // validate checks a forge entry and fills in defaults.
 func (f *Forge) validate() error {
 	switch f.Kind {
-	case "gitlab", "gitea":
+	case "gitlab", "github", "gitea":
 	default:
-		return fmt.Errorf("forge kind %q is not supported (use gitlab or gitea)", f.Kind)
+		return fmt.Errorf("forge kind %q is not supported (use gitlab, github or gitea)", f.Kind)
 	}
 	if f.Host == "" {
 		return fmt.Errorf("%s forge has no host", f.Kind)
@@ -78,6 +79,8 @@ func fetchOpenMRs(forges []Forge) ([]*MR, error) {
 		switch f.Kind {
 		case "gitlab":
 			mrs, err = fetchGitLab(f)
+		case "github":
+			mrs, err = fetchGitHub(f)
 		case "gitea":
 			mrs, err = fetchGitea(f)
 		}
@@ -123,20 +126,30 @@ func lastLine(s string) string {
 	return s
 }
 
-// decodeArrays decodes one or more concatenated JSON arrays, which is what
+// decodeStream decodes one or more concatenated JSON values, which is what
 // paginated CLI output looks like.
-func decodeArrays[T any](data []byte) ([]T, error) {
+func decodeStream[T any](data []byte) ([]T, error) {
 	var out []T
 	dec := json.NewDecoder(bytes.NewReader(data))
 	for {
-		var page []T
-		if err := dec.Decode(&page); err == io.EOF {
+		var v T
+		if err := dec.Decode(&v); err == io.EOF {
 			return out, nil
 		} else if err != nil {
 			return out, err
 		}
-		out = append(out, page...)
+		out = append(out, v)
 	}
+}
+
+// decodeArrays decodes one or more concatenated JSON arrays into one slice.
+func decodeArrays[T any](data []byte) ([]T, error) {
+	pages, err := decodeStream[[]T](data)
+	var out []T
+	for _, p := range pages {
+		out = append(out, p...)
+	}
+	return out, err
 }
 
 type gitlabMR struct {
@@ -223,6 +236,106 @@ func gitlabStatus(m gitlabMR) string {
 		return "ci"
 	case "discussions_not_resolved":
 		return "discussions"
+	}
+	return ""
+}
+
+type githubPR struct {
+	URL            string    `json:"url"`
+	Number         int       `json:"number"`
+	Title          string    `json:"title"`
+	HeadRefName    string    `json:"headRefName"`
+	IsDraft        bool      `json:"isDraft"`
+	Mergeable      string    `json:"mergeable"`      // MERGEABLE, CONFLICTING or UNKNOWN
+	ReviewDecision string    `json:"reviewDecision"` // APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED or empty
+	UpdatedAt      time.Time `json:"updatedAt"`
+	Repository     struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
+	Commits struct {
+		Nodes []struct {
+			Commit struct {
+				StatusCheckRollup *struct {
+					State string `json:"state"`
+				} `json:"statusCheckRollup"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"commits"`
+}
+
+type githubPage struct {
+	Data struct {
+		Search struct {
+			Nodes []githubPR `json:"nodes"`
+		} `json:"search"`
+	} `json:"data"`
+}
+
+// githubQuery searches pull requests across every repository in one request
+// per page; gh api --paginate drives $endCursor.
+const githubQuery = `query($q: String!, $endCursor: String) {
+  search(query: $q, type: ISSUE, first: 100, after: $endCursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest {
+      url number title headRefName isDraft mergeable reviewDecision updatedAt
+      repository { nameWithOwner }
+      commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+    } }
+  }
+}`
+
+func fetchGitHub(f Forge) ([]*MR, error) {
+	var env []string
+	if f.Login != "" {
+		env = append(env, "GH_CONFIG_DIR="+expandHome(f.Login))
+	}
+	var out []*MR
+	for _, scope := range f.Scopes {
+		qualifier := map[string]string{"author": "author:@me", "assignee": "assignee:@me", "reviewer": "review-requested:@me"}[scope]
+		data, err := runForgeCLI(env, "gh", "api", "graphql", "--hostname", f.Host, "--paginate",
+			"-f", "query="+githubQuery, "-f", "q=is:pr is:open archived:false "+qualifier)
+		if err != nil {
+			return out, err
+		}
+		pages, err := decodeStream[githubPage](data)
+		if err != nil {
+			return out, fmt.Errorf("gh: %w", err)
+		}
+		for _, page := range pages {
+			for _, p := range page.Data.Search.Nodes {
+				out = append(out, &MR{
+					URL:          p.URL,
+					Project:      p.Repository.NameWithOwner,
+					Ref:          fmt.Sprintf("#%d", p.Number),
+					Title:        p.Title,
+					SourceBranch: p.HeadRefName,
+					Draft:        p.IsDraft,
+					Status:       githubStatus(p),
+					Updated:      p.UpdatedAt,
+				})
+			}
+		}
+	}
+	return out, nil
+}
+
+// githubStatus reduces mergeability, checks and review decision to one word.
+func githubStatus(p githubPR) string {
+	if p.Mergeable == "CONFLICTING" {
+		return "conflicts"
+	}
+	if n := p.Commits.Nodes; len(n) > 0 && n[0].Commit.StatusCheckRollup != nil {
+		switch n[0].Commit.StatusCheckRollup.State {
+		case "PENDING", "EXPECTED", "FAILURE", "ERROR":
+			return "ci"
+		}
+	}
+	switch p.ReviewDecision {
+	case "CHANGES_REQUESTED", "REVIEW_REQUIRED":
+		return "needs approval"
+	}
+	if p.Mergeable == "MERGEABLE" {
+		return "mergeable"
 	}
 	return ""
 }

@@ -34,8 +34,8 @@ to be sent on. Here they are your Claude sessions.
 - Start new sessions in a fresh git worktree, with a branch name of your
   choosing.
 - Rename, archive and filter sessions.
-- Optionally, the open merge requests on GitLab or Gitea that belong to each
-  session (see [Merge requests](#merge-requests)).
+- Optionally, the open merge requests on GitLab, GitHub or Gitea that belong
+  to each session (see [Merge requests](#merge-requests)).
 - Reads Claude's files; the only write is a rename record (see
   [Configuration](#configuration)).
 
@@ -45,8 +45,9 @@ to be sent on. Here they are your Claude sessions.
 - [Go](https://go.dev/dl/) 1.26 or newer, to build it.
 - The [`claude` CLI](https://docs.claude.com/en/docs/claude-code) on your `PATH`.
 - `git`, for worktree sessions.
-- Optionally [`glab`](https://gitlab.com/gitlab-org/cli) or
-  [`tea`](https://gitea.com/gitea/tea), logged in, for merge requests.
+- Optionally [`glab`](https://gitlab.com/gitlab-org/cli),
+  [`gh`](https://cli.github.com) or [`tea`](https://gitea.com/gitea/tea),
+  logged in, for merge requests.
 
 ## Install
 
@@ -197,8 +198,8 @@ idle).
 ### Merge requests
 
 Give a profile one or more forges and reserva shows the open merge requests
-(GitLab) or pull requests (Gitea, Forgejo, Codeberg) that belong to its
-sessions:
+(GitLab) or pull requests (GitHub, Gitea, Forgejo, Codeberg) that belong to
+its sessions:
 
 ```toml
 [profiles.work]
@@ -207,18 +208,21 @@ forges = [{ kind = "gitlab", host = "gitlab.com" }]
 
 [profiles.personal]
 config_dir = "~/.claude-personal"
-forges = [{ kind = "gitea", host = "gitea.example.com", scopes = ["author"] }]
+forges = [
+  { kind = "github", host = "github.com" },
+  { kind = "gitea", host = "codeberg.org", scopes = ["author"] },
+]
 ```
 
 | Key | Meaning |
 | --- | --- |
-| `kind` | `gitlab` (queried with `glab api`) or `gitea` (with `tea api`) |
+| `kind` | `gitlab` (queried with `glab api`), `github` (with `gh api`) or `gitea` (with `tea api`) |
 | `host` | the forge's host name |
-| `login` | optional: the `tea` login to use (defaults to `host`), or a `GLAB_CONFIG_DIR` for `glab` |
+| `login` | optional: the `tea` login to use (defaults to `host`), or a `GLAB_CONFIG_DIR` / `GH_CONFIG_DIR` for `glab` / `gh` |
 | `scopes` | which open MRs to fetch: any of `author`, `assignee`, `reviewer`; default `["author", "assignee"]` |
 
 reserva never handles tokens; it runs the forge's CLI, so log in with
-`glab auth login` or `tea login add` first. MRs are fetched in the background
+`glab auth login`, `gh auth login` or `tea login add` first. MRs are fetched in the background
 at startup, every two minutes and on `r`, and the last result is cached in
 `~/.local/state/reserva/mrs.json` so it shows up straight away. If a fetch
 fails, the profile's tab gets a red `mr?` and the last good set stays.
