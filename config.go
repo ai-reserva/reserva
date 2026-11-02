@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -112,6 +113,9 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.Terminal == "" {
 		cfg.Terminal = os.Getenv("TERMINAL")
 	}
+	if cfg.Terminal == "" && runtime.GOOS == "darwin" && os.Getenv("TERM_PROGRAM") == "Apple_Terminal" {
+		cfg.Terminal = terminalApp
+	}
 	if cfg.DefaultProfile == "" || cfg.Profiles[cfg.DefaultProfile].ConfigDir == "" {
 		cfg.DefaultProfile = cfg.order[0]
 	}
@@ -192,7 +196,8 @@ func writeDefaultConfig(path string) error {
 	b.WriteString("\n# Extra arguments appended to every claude invocation.\n")
 	b.WriteString("claude_args = []\n")
 	b.WriteString("\n# Terminal emulator used by shift+enter / ctrl+shift+enter.\n")
-	b.WriteString("# Defaults to $TERMINAL. Flags for running a command are added\n")
+	b.WriteString("# Defaults to $TERMINAL, or to \"Terminal.app\" when running in\n")
+	b.WriteString("# Terminal.app on macOS. Flags for running a command are added\n")
 	b.WriteString("# automatically for common terminals, or spell them out, e.g.\n")
 	b.WriteString("# terminal = \"wezterm start --\"\n")
 	b.WriteString("terminal = \"\"\n")

@@ -14,18 +14,26 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// configDirEnv returns the CLAUDE_CONFIG_DIR assignment for a profile, or
+// "" for ~/.claude. That is claude's own default, and setting the variable
+// to it moves the state file from ~/.claude.json to ~/.claude/.claude.json.
+func configDirEnv(p Profile) string {
+	home, _ := os.UserHomeDir()
+	if filepath.Clean(p.ConfigDir) == filepath.Join(home, ".claude") {
+		return ""
+	}
+	return "CLAUDE_CONFIG_DIR=" + p.ConfigDir
+}
+
 // claudeEnv returns the environment for running claude under a profile.
-// ~/.claude is claude's own default, and setting CLAUDE_CONFIG_DIR to it
-// moves the state file from ~/.claude.json to ~/.claude/.claude.json.
 func claudeEnv(p Profile) []string {
 	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		return strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=")
 	})
-	home, _ := os.UserHomeDir()
-	if filepath.Clean(p.ConfigDir) == filepath.Join(home, ".claude") {
-		return env
+	if kv := configDirEnv(p); kv != "" {
+		env = append(env, kv)
 	}
-	return append(env, "CLAUDE_CONFIG_DIR="+p.ConfigDir)
+	return env
 }
 
 // claudeArgv builds the claude command line.
@@ -158,6 +166,9 @@ func terminalArgv(c *Config) ([]string, error) {
 
 // spawnTerminal opens argv in a new terminal window, detached from the TUI.
 func spawnTerminal(c *Config, p Profile, dir string, argv []string) error {
+	if isTerminalApp(c.Terminal) {
+		return spawnTerminalApp(p, dir, argv)
+	}
 	term, err := terminalArgv(c)
 	if err != nil {
 		return err
@@ -172,4 +183,53 @@ func spawnTerminal(c *Config, p Profile, dir string, argv []string) error {
 	}
 	go cmd.Wait() //nolint:errcheck // reap the child
 	return nil
+}
+
+// terminalApp is the terminal setting for Terminal.app on macOS, which has
+// no command line for opening a window with a command and is driven over
+// AppleScript instead.
+const terminalApp = "Terminal.app"
+
+func isTerminalApp(spec string) bool {
+	return strings.EqualFold(strings.TrimSpace(spec), terminalApp)
+}
+
+// Runs the shell command in argv in a new Terminal.app window.
+const terminalAppSpawnScript = `
+on run argv
+	tell application "Terminal"
+		do script (item 1 of argv)
+		activate
+	end tell
+end run
+`
+
+// spawnTerminalApp opens argv in a new Terminal.app window. The window runs
+// a login shell, so the directory and profile environment travel inside the
+// command line rather than through exec.Cmd.
+func spawnTerminalApp(p Profile, dir string, argv []string) error {
+	words := []string{"cd", shellQuote(dir), "&&", "exec"}
+	if kv := configDirEnv(p); kv != "" {
+		words = append(words, "env", shellQuote(kv))
+	}
+	for _, a := range argv {
+		words = append(words, shellQuote(a))
+	}
+	cmd := exec.Command("osascript", "-", strings.Join(words, " "))
+	cmd.Stdin = strings.NewReader(terminalAppSpawnScript)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("osascript: %s", msg)
+		}
+		return fmt.Errorf("osascript: %w", err)
+	}
+	return nil
+}
+
+// shellQuote quotes s for a POSIX shell.
+func shellQuote(s string) string {
+	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`&|;<>()*?[]#~=%!{}") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

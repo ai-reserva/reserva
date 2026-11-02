@@ -248,7 +248,9 @@ flag that introduces the command: `wezterm start --`, `gnome-terminal --`,
 `tilix --`, `ptyxis --`, nothing for `foot`, and `-e` for everything else
 (alacritty, kitty, ghostty, xterm, konsole, st, …). If your terminal needs
 something different, spell out the full prefix, for example
-`terminal = "kitty --single-instance"`.
+`terminal = "kitty --single-instance"`. On macOS, `terminal = "Terminal.app"`
+opens windows in Terminal.app over AppleScript; it is the default when
+reserva itself runs in Terminal.app.
 
 ### State and writes
 
@@ -279,12 +281,15 @@ reserva builds and runs on macOS, and listing, resuming, renaming,
 archiving and starting sessions in the current terminal all work. It was
 developed on Linux, though, and macOS has not been tested much. Things to know:
 
-- **New windows need setup.** Opening a session in a new window starts a
-  terminal binary with a command to run, and `$TERMINAL` is usually unset on
-  macOS. Without one, reserva runs everything in the current terminal.
-  Terminal.app and iTerm2 cannot be started this way and are not supported
-  for new windows. WezTerm, kitty and Alacritty work if their CLI is
-  on your `PATH`, for example:
+- **New windows.** In Terminal.app, new windows work out of the box: the
+  session is started through AppleScript in a new Terminal.app window
+  (a login shell runs `cd <dir> && exec claude ...`). From any other
+  terminal, opening a new window starts a terminal binary with a command to
+  run, and `$TERMINAL` is usually unset on macOS. Without one, reserva runs
+  everything in the current terminal. Set `terminal = "Terminal.app"` to
+  use Terminal.app anyway. iTerm2 cannot be started with a command and is
+  not supported for new windows. WezTerm, kitty and Alacritty work if their
+  CLI is on your `PATH`, for example:
 
   ```toml
   terminal = "wezterm start --"
