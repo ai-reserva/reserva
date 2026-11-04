@@ -1,4 +1,4 @@
-module jpnadas.com/reserva
+module github.com/ai-reserva/reserva
 
 go 1.26.0
 

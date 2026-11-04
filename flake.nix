@@ -44,7 +44,7 @@
 
             meta = {
               description = "A terminal UI for managing Claude Code sessions";
-              homepage = "https://codeberg.org/jpnadas/reserva";
+              homepage = "https://github.com/ai-reserva/reserva";
               license = lib.licenses.mit;
               mainProgram = "reserva";
               platforms = lib.platforms.linux ++ lib.platforms.darwin;

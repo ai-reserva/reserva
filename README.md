@@ -54,7 +54,7 @@ to be sent on. Here they are your Claude sessions.
 With Go:
 
 ```sh
-go install jpnadas.com/reserva@latest
+go install github.com/ai-reserva/reserva@latest
 ```
 
 This puts the binary in `$(go env GOPATH)/bin` (usually `~/go/bin`); make sure
@@ -63,7 +63,7 @@ that directory is on your `PATH`.
 From a checkout:
 
 ```sh
-git clone https://codeberg.org/jpnadas/reserva
+git clone https://github.com/ai-reserva/reserva
 cd reserva
 go build -o reserva .
 mkdir -p ~/.local/bin && mv reserva ~/.local/bin/
@@ -72,7 +72,7 @@ mkdir -p ~/.local/bin && mv reserva ~/.local/bin/
 With Nix:
 
 ```sh
-nix run git+https://codeberg.org/jpnadas/reserva
+nix run github:ai-reserva/reserva
 ```
 
 `nix develop` in a checkout gives a shell with Go, gopls, golangci-lint and
