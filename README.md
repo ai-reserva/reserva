@@ -195,6 +195,12 @@ are read from `<config_dir>/projects/*/*.jsonl`; running sessions are detected
 from `<config_dir>/sessions/*.json` and marked with a dot (green busy, yellow
 idle).
 
+With more than one profile, an `all` tab comes first and is where reserva
+starts: every profile's sessions in one list, each prefixed with its profile
+name, so `/` filters by profile too. Resuming a session there uses the
+profile it belongs to; new sessions (`n`, `N`, `enter` on a header) start in
+`default_profile`. `--profile <name>` opens a profile's own tab instead.
+
 ### Merge requests
 
 Give a profile one or more forges and reserva shows the open merge requests

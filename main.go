@@ -23,16 +23,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, "reserva:", err)
 		os.Exit(1)
 	}
-	start := cfg.DefaultProfile
-	if *profile != "" {
-		if _, ok := cfg.Profiles[*profile]; !ok {
-			fmt.Fprintf(os.Stderr, "reserva: unknown profile %q\n", *profile)
+	// Without --profile the TUI starts on the all tab (or the only profile)
+	// and --list prints the default profile.
+	start := *profile
+	if start != "" && start != allProfile {
+		if _, ok := cfg.Profiles[start]; !ok {
+			fmt.Fprintf(os.Stderr, "reserva: unknown profile %q\n", start)
 			os.Exit(1)
 		}
-		start = *profile
 	}
 
 	if *list {
+		if start == "" {
+			start = cfg.DefaultProfile
+		}
 		printSessions(cfg, start)
 		return
 	}
@@ -45,10 +49,18 @@ func main() {
 }
 
 func printSessions(cfg *Config, profile string) {
-	groups, err := loadProfile(cfg.Profiles[profile])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "reserva:", err)
-		os.Exit(1)
+	names := []string{profile}
+	if profile == allProfile {
+		names = cfg.ProfileNames()
+	}
+	var groups []*Group
+	for _, name := range names {
+		g, err := loadProfile(cfg.Profiles[name])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "reserva:", err)
+			os.Exit(1)
+		}
+		groups = append(groups, g...)
 	}
 	for _, g := range groups {
 		fmt.Println(shortPath(g.Repo))
