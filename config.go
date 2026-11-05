@@ -174,7 +174,54 @@ func discoverConfigDirs() []Profile {
 	if len(out) == 0 {
 		out = append(out, Profile{Name: "default", ConfigDir: "~/.claude"})
 	}
+	return append(out, discoverClaudeSwapDirs()...)
+}
+
+// discoverClaudeSwapDirs finds the per-account profiles of claude-swap
+// (cswap), which live in $XDG_DATA_HOME/claude-swap/sessions/<n>-<email>
+// with "@" written as "_". The profile is named after the email's local
+// part, with the account number appended when that is taken.
+func discoverClaudeSwapDirs() []Profile {
+	data := os.Getenv("XDG_DATA_HOME")
+	if data == "" {
+		home, _ := os.UserHomeDir()
+		data = filepath.Join(home, ".local", "share")
+	}
+	entries, _ := filepath.Glob(filepath.Join(data, "claude-swap", "sessions", "*-*"))
+	sort.Strings(entries)
+	var out []Profile
+	taken := map[string]bool{"default": true}
+	for _, e := range entries {
+		if _, err := os.Stat(filepath.Join(e, "projects")); err != nil {
+			continue
+		}
+		base := filepath.Base(e)
+		num, email, _ := strings.Cut(base, "-")
+		name, _, _ := strings.Cut(email, "_")
+		if name == "" {
+			name = email
+		}
+		if taken[name] {
+			name += "-" + num
+		}
+		taken[name] = true
+		dir := e
+		if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(e, home+"/") {
+			dir = "~" + e[len(home):]
+		}
+		out = append(out, Profile{Name: name, ConfigDir: dir})
+	}
 	return out
+}
+
+// tomlKey quotes a table key unless it is a bare key (A-Za-z0-9_-).
+func tomlKey(name string) string {
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return fmt.Sprintf("%q", name)
+		}
+	}
+	return name
 }
 
 func writeDefaultConfig(path string) error {
@@ -209,10 +256,12 @@ func writeDefaultConfig(path string) error {
 	b.WriteString("\n# New sessions are started in a fresh git worktree (claude --worktree).\n")
 	b.WriteString("worktrees = true\n")
 	b.WriteString("\n# One profile per Claude Code config directory (CLAUDE_CONFIG_DIR).\n")
+	b.WriteString("# ~/.claude, ~/.claude-* and claude-swap (cswap) accounts are found\n")
+	b.WriteString("# automatically on first run.\n")
 	b.WriteString("# Add forges to a profile to see its open merge requests (m), e.g.\n")
 	b.WriteString("# forges = [{ kind = \"gitlab\", host = \"gitlab.com\" }]\n")
 	for _, p := range profiles {
-		fmt.Fprintf(&b, "\n[profiles.%s]\nconfig_dir = %q\n", p.Name, p.ConfigDir)
+		fmt.Fprintf(&b, "\n[profiles.%s]\nconfig_dir = %q\n", tomlKey(p.Name), p.ConfigDir)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

@@ -27,8 +27,9 @@ to be sent on. Here they are your Claude sessions.
 
 - Every Claude Code session on your machine, grouped by repository and sorted
   by recent activity, with live busy/idle markers for sessions that are running.
-- Multiple Claude profiles (`~/.claude`, `~/.claude-work`, …) as tabs, each
-  launched with its own `CLAUDE_CONFIG_DIR`.
+- Multiple Claude profiles (`~/.claude`, `~/.claude-work`, …, and
+  [claude-swap](https://github.com/realiti4/claude-swap) accounts) as tabs,
+  each launched with its own `CLAUDE_CONFIG_DIR`.
 - Resume a session or open a shell in its worktree, in the current terminal or
   a new window.
 - Start new sessions in a fresh git worktree, with a branch name of your
@@ -172,7 +173,12 @@ started in spawned windows appear on their own; `r` forces it.
 
 `~/.config/reserva/config.toml` (or `$XDG_CONFIG_HOME/reserva/`) is
 created on first run. Profiles are discovered from `~/.claude` and
-`~/.claude-*` directories; each profile is a `CLAUDE_CONFIG_DIR`.
+`~/.claude-*` directories, and from the accounts of
+[claude-swap](https://github.com/realiti4/claude-swap) (`cswap`), which keeps
+one config dir per account under
+`~/.local/share/claude-swap/sessions/<n>-<email>`. Those are named after the
+local part of the email (`georgy` for `georgy@example.com`). Each profile is a
+`CLAUDE_CONFIG_DIR`.
 
 ```toml
 default_profile = "work"
