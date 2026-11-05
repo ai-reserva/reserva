@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,6 +63,13 @@ type mrsMsg struct {
 	err     error
 }
 
+type scanMsg struct {
+	profile string
+	filter  string
+	hits    map[string]string
+	took    time.Duration
+}
+
 type execDoneMsg struct {
 	name    string
 	cmdline string
@@ -93,6 +101,11 @@ type model struct {
 
 	archive      *archiveState
 	showArchived bool
+
+	// content search: enter in the filter prompt scans the conversation
+	// files for the filter terms; hits holds a snippet per session ID
+	hits     map[string]string
+	scanning bool
 
 	mrView  bool             // show only sessions with open MRs, MRs nested
 	mrs     map[string][]*MR // open MRs per profile
@@ -182,6 +195,24 @@ func (m model) fetchMRsCmd(name string) tea.Cmd {
 	}
 }
 
+// scanCmd searches the conversation files of the selected profile for the
+// filter terms in the background.
+func (m *model) scanCmd() tea.Cmd {
+	var sessions []*Session
+	for _, g := range m.pd().groups {
+		sessions = append(sessions, g.Sessions...)
+	}
+	terms := filterTerms(m.filter)
+	profile, filter := m.profiles[m.profile], m.filter
+	m.scanning = true
+	m.status = fmt.Sprintf("searching %d conversations for %s…", len(sessions), filter)
+	return func() tea.Msg {
+		start := time.Now()
+		hits := scanSessions(sessions, terms)
+		return scanMsg{profile: profile, filter: filter, hits: hits, took: time.Since(start)}
+	}
+}
+
 func (m model) fetchAllMRsCmd() tea.Cmd {
 	var cmds []tea.Cmd
 	for _, p := range m.profiles {
@@ -211,7 +242,7 @@ func (m *model) rebuildRows() {
 		sel = m.rows[m.cursor]
 	}
 	m.rows = m.rows[:0]
-	f := strings.ToLower(m.filter)
+	f := m.filter
 	if m.mrView {
 		m.buildMRRows(f)
 	} else {
@@ -271,7 +302,7 @@ func (m *model) buildMRRows(f string) {
 			for _, mr := range s.MRs {
 				claimed[mr] = true
 			}
-			if f != "" && !matches(s, f) && !slices.ContainsFunc(s.MRs, func(mr *MR) bool { return mrMatches(mr, f) }) {
+			if f != "" && !matches(s, f) && m.hits[s.ID] == "" && !slices.ContainsFunc(s.MRs, func(mr *MR) bool { return mrMatches(mr, f) }) {
 				continue
 			}
 			m.rows = append(m.rows, row{group: g, sess: s})
@@ -301,25 +332,58 @@ func (m *model) buildMRRows(f string) {
 }
 
 func mrMatches(mr *MR, f string) bool {
-	return strings.Contains(strings.ToLower(mr.Title), f) ||
-		strings.Contains(strings.ToLower(mr.Ref), f) ||
-		strings.Contains(strings.ToLower(mr.Project), f) ||
-		strings.Contains(strings.ToLower(mr.SourceBranch), f)
+	for _, term := range filterTerms(f) {
+		if !fuzzyMatch(mr.Title, term) && !containsFold(term, mr.Ref, mr.Project, mr.SourceBranch) {
+			return false
+		}
+	}
+	return true
+}
+
+// containsFold reports whether one of the texts contains term, ignoring case.
+func containsFold(term string, texts ...string) bool {
+	term = strings.ToLower(term)
+	for _, t := range texts {
+		if strings.Contains(strings.ToLower(t), term) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesText reports whether every term of the filter fuzzy-matches one
+// of the texts.
+func matchesText(f string, texts ...string) bool {
+	for _, term := range filterTerms(f) {
+		if !matchesAny(term, texts...) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *model) buildSessionRows(f string) {
+	// With a filter on, the list is ranked like fzf's: sessions by score
+	// within a project, projects by their best session.
+	type block struct {
+		g    *Group
+		keep []*Session
+		n    int
+		best int
+	}
+	var blocks []block
 	for _, g := range m.pd().groups {
 		var keep []*Session
 		for _, s := range g.Sessions {
 			if s.Archived && !m.showArchived {
 				continue
 			}
-			if f == "" || matches(s, f) {
+			if f == "" || matches(s, f) || m.hits[s.ID] != "" {
 				keep = append(keep, s)
 			}
 		}
 		if len(keep) == 0 && (f != "" || !m.showArchived && m.archivedIn(g) > 0) {
-			if f == "" || !strings.Contains(strings.ToLower(g.Repo), f) {
+			if f == "" || !matchesText(f, shortPath(g.Repo)) {
 				continue
 			}
 		}
@@ -327,9 +391,22 @@ func (m *model) buildSessionRows(f string) {
 		if !m.showArchived {
 			n -= m.archivedIn(g)
 		}
-		m.rows = append(m.rows, row{group: g, n: n})
-		for _, s := range keep {
-			m.rows = append(m.rows, row{group: g, sess: s})
+		b := block{g: g, keep: keep, n: n}
+		if f != "" {
+			scores := map[*Session]int{}
+			for _, s := range keep {
+				scores[s] = filterScore(s, f)
+				b.best = max(b.best, scores[s])
+			}
+			sort.SliceStable(keep, func(i, j int) bool { return scores[keep[i]] > scores[keep[j]] })
+		}
+		blocks = append(blocks, b)
+	}
+	sort.SliceStable(blocks, func(i, j int) bool { return blocks[i].best > blocks[j].best })
+	for _, b := range blocks {
+		m.rows = append(m.rows, row{group: b.g, n: b.n})
+		for _, s := range b.keep {
+			m.rows = append(m.rows, row{group: b.g, sess: s})
 		}
 	}
 }
@@ -375,13 +452,19 @@ func (m *model) archivedTotal() int {
 	return n
 }
 
+// matches reports whether every term of the filter fits the session: fuzzy
+// on the title (fzf's matcher), as a substring of the last prompt, branch,
+// worktree or path, or as a prefix of the ID. Fuzzy matching on long
+// prompts, paths and IDs would let almost any term through.
 func matches(s *Session, f string) bool {
-	return strings.Contains(strings.ToLower(s.Title), f) ||
-		strings.Contains(strings.ToLower(s.LastPrompt), f) ||
-		strings.Contains(strings.ToLower(s.Branch), f) ||
-		strings.Contains(strings.ToLower(s.Repo), f) ||
-		strings.Contains(strings.ToLower(s.Worktree), f) ||
-		strings.HasPrefix(s.ID, f)
+	for _, term := range filterTerms(f) {
+		if !fuzzyMatch(s.Title, term) &&
+			!containsFold(term, s.LastPrompt, s.Branch, s.Worktree, shortPath(s.Repo)) &&
+			!strings.HasPrefix(s.ID, term) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *model) listHeight() int {
@@ -434,6 +517,7 @@ func (m *model) switchProfile(delta int) tea.Cmd {
 	n := len(m.profiles)
 	m.profile = ((m.profile+delta)%n + n) % n
 	m.cursor, m.offset = 0, 0
+	m.hits = nil // content hits are per profile; enter in / scans again
 	m.rebuildRows()
 	pd := m.pd()
 	if !pd.loaded && !pd.loading {
@@ -700,6 +784,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, liveTick()
 
+	case scanMsg:
+		if msg.profile != m.profiles[m.profile] {
+			return m, nil
+		}
+		m.scanning = false
+		if msg.filter != m.filter { // typed on meanwhile; those hits are stale
+			return m, nil
+		}
+		m.hits = msg.hits
+		m.rebuildRows()
+		m.status = fmt.Sprintf("%d conversations mention %s", len(msg.hits), msg.filter) +
+			styleDim.Render(fmt.Sprintf("  (searched in %.1fs; esc clears)", msg.took.Seconds()))
+		return m, nil
+
 	case execDoneMsg:
 		if msg.err != nil {
 			detail := msg.err.Error()
@@ -738,14 +836,19 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case modeFilter:
 		switch key {
 		case "esc":
-			m.filter, m.input = "", ""
+			m.filter, m.input, m.hits = "", "", nil
 			m.mode = modeList
 			m.rebuildRows()
 		case "enter":
 			m.mode = modeList
+			if m.filter != "" && m.hits == nil {
+				return m, m.scanCmd()
+			}
 		default:
 			m.input = editText(m.input, msg)
 			m.filter = m.input
+			m.hits = nil
+			m.rows, m.cursor, m.offset = m.rows[:0], 0, 0 // cursor on the best match
 			m.rebuildRows()
 		}
 		return m, nil
@@ -898,7 +1001,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.input = m.filter
 	case "esc":
 		if m.filter != "" {
-			m.filter = ""
+			m.filter, m.hits = "", nil
 			m.rebuildRows()
 		}
 	case "r":
@@ -1288,7 +1391,9 @@ func (m model) statusView(w int) string {
 	_, s := m.selected()
 	if s != nil {
 		detail := shortPath(s.CWD)
-		if s.LastPrompt != "" && s.LastPrompt != s.Title {
+		if hit := m.hits[s.ID]; hit != "" {
+			detail += "  " + styleDim.Render("≈ "+hit)
+		} else if s.LastPrompt != "" && s.LastPrompt != s.Title {
 			detail += "  " + styleDim.Render("› "+s.LastPrompt)
 		}
 		if s.Running {
@@ -1310,7 +1415,7 @@ func (m model) keysView(w int) string {
 	var parts []string
 	switch m.mode {
 	case modeFilter:
-		parts = []string{k("type", "to filter"), k("enter", "keep"), k("esc", "clear")}
+		parts = []string{k("type", "to filter"), k("enter", "also search conversation texts"), k("esc", "clear")}
 	case modeRepo:
 		if len(m.compl) > 0 {
 			return " " + truncate(strings.Join(m.compl, "  "), w-1)
@@ -1372,7 +1477,11 @@ func (m model) helpView() string {
 		"                  each MR nested under its session; enter opens the MR in the browser,",
 		"                  the other keys act on its session",
 		"",
-		"  Other        a  archive/unarchive    A  show archived    R  rename    /  filter",
+		"  Filter       /  terms (all must match): fuzzy on the title, substring on prompt,",
+		"                  branch, worktree and path; enter searches the conversation texts too",
+		"                  (prompts, replies, tool output), ≈ in the status bar shows the hit",
+		"",
+		"  Other        a  archive/unarchive    A  show archived    R  rename",
 		"               r  reload (and refetch MRs)    ?  help    q  quit",
 		"",
 		"  Marks        ● busy   ● idle   ✗ directory missing   ⎇ worktree   !12 open MR (+n more)",

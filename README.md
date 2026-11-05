@@ -99,7 +99,7 @@ Navigation is vim-style.
 | `R` | rename the selected session |
 | `a` | archive or unarchive the selected session |
 | `A` | show or hide archived sessions |
-| `/` | filter sessions by title, prompt, branch or path |
+| `/` | filter sessions by title, prompt, branch or path; `enter` searches the conversation texts too (see [Search](#search)) |
 | `m` | toggle the [merge request](#merge-requests) view |
 | `r` | reload (and refetch merge requests) |
 | `?` | help |
@@ -141,6 +141,24 @@ On macOS this works for sessions running in Terminal.app. The tab is found
 by the tty of the Claude process and selected through AppleScript, so
 shells and tmux in between do not matter. Other terminals are not
 supported.
+
+## Search
+
+`/` filters the list as you type. The filter is split into terms on spaces
+and every term has to match: fuzzily, with
+[fzf](https://github.com/junegunn/fzf)'s matcher, against the session's
+title, or as a plain substring of its last prompt, branch, worktree name or
+path (fuzzy matching on long prompts and paths would let almost anything
+through), or as a prefix of its ID. A term with an upper-case letter is
+matched case-sensitively.
+
+`enter` in the filter prompt then searches the conversation texts too: the
+session files are read in full, prompts, replies and tool output alike, for
+every term as a plain, case-insensitive substring. Sessions that mention all
+of them join the list, and the status bar shows the first hit (`≈ …`) when
+one is selected. There is no index; the files are scanned every time, in
+parallel, which takes a few seconds for a gigabyte of sessions. Typing
+changes the filter and drops the hits, `esc` clears both.
 
 ## Worktrees
 
