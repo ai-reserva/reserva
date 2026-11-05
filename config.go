@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -28,6 +29,7 @@ type Config struct {
 	Shell          string             `toml:"shell"`
 	Worktrees      *bool              `toml:"worktrees"`
 	NewTerminal    *bool              `toml:"new_terminal"`
+	Sort           string             `toml:"sort"` // initial sort key, one of sortKeys
 	Profiles       map[string]Profile `toml:"profiles"`
 
 	// ordered profile names, in config file order
@@ -103,6 +105,12 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if cfg.ClaudeBin == "" {
 		cfg.ClaudeBin = "claude"
+	}
+	if cfg.Sort == "" {
+		cfg.Sort = sortKeys[0]
+	}
+	if !slices.Contains(sortKeys, cfg.Sort) {
+		return nil, fmt.Errorf("%s: sort must be one of %s, not %q", path, strings.Join(sortKeys, ", "), cfg.Sort)
 	}
 	if cfg.Shell == "" {
 		cfg.Shell = os.Getenv("SHELL")
@@ -208,6 +216,8 @@ func writeDefaultConfig(path string) error {
 	b.WriteString("shell = \"\"\n")
 	b.WriteString("\n# New sessions are started in a fresh git worktree (claude --worktree).\n")
 	b.WriteString("worktrees = true\n")
+	b.WriteString("\n# Initial sort order: activity, path, name or branch (s cycles, S reverses).\n")
+	b.WriteString("sort = \"activity\"\n")
 	b.WriteString("\n# One profile per Claude Code config directory (CLAUDE_CONFIG_DIR).\n")
 	b.WriteString("# Add forges to a profile to see its open merge requests (m), e.g.\n")
 	b.WriteString("# forges = [{ kind = \"gitlab\", host = \"gitlab.com\" }]\n")

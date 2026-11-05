@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -94,6 +95,9 @@ type model struct {
 	archive      *archiveState
 	showArchived bool
 
+	sortBy   int  // index into sortKeys
+	sortDesc bool // reverse the key's natural order
+
 	mrView  bool             // show only sessions with open MRs, MRs nested
 	mrs     map[string][]*MR // open MRs per profile
 	mrErr   map[string]error // last forge error per profile
@@ -129,6 +133,7 @@ func newModel(cfg *Config, startProfile string) model {
 		mrErr:    map[string]error{},
 		mrBusy:   map[string]bool{},
 		mrCache:  loadMRCache(defaultMRCachePath()),
+		sortBy:   slices.Index(sortKeys, cfg.Sort),
 	}
 	for p, mrs := range m.mrCache.Profiles {
 		if len(cfg.Profiles[p].Forges) > 0 {
@@ -204,12 +209,71 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(m.loadCmd(m.profiles[m.profile]), liveTick(), rescanTick(), m.fetchAllMRsCmd(), forgeTick())
 }
 
-// rebuildRows flattens groups into the visible list, applying the filter.
+// sortKeys are the orders the list can be in: by recent activity (newest
+// first), or by repository path and then session directory, title or branch.
+var sortKeys = []string{"activity", "path", "name", "branch"}
+
+// sortGroups orders the groups and the sessions in them by the selected key.
+// Ties fall back to recent activity. S reverses the key's order.
+func (m *model) sortGroups(groups []*Group) {
+	key := sortKeys[m.sortBy]
+	less := func(c int) bool {
+		if m.sortDesc {
+			return c > 0
+		}
+		return c < 0
+	}
+	sessionKey := func(s *Session) string {
+		switch key {
+		case "path":
+			return s.CWD
+		case "name":
+			return strings.ToLower(s.Title)
+		case "branch":
+			if s.Worktree != "" {
+				return s.Worktree
+			}
+			return s.Branch
+		}
+		return ""
+	}
+	for _, g := range groups {
+		sort.SliceStable(g.Sessions, func(i, j int) bool {
+			a, b := g.Sessions[i], g.Sessions[j]
+			if key == "activity" {
+				return less(b.Modified.Compare(a.Modified))
+			}
+			if c := strings.Compare(sessionKey(a), sessionKey(b)); c != 0 {
+				return less(c)
+			}
+			return b.Modified.Before(a.Modified)
+		})
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		if key == "activity" {
+			return less(groups[j].Latest.Compare(groups[i].Latest))
+		}
+		return less(strings.Compare(groups[i].Repo, groups[j].Repo))
+	})
+}
+
+// sortLabel is the " sort: <key> ▾" shown in the title bar.
+func (m model) sortLabel() string {
+	arrow := "▾"
+	if m.sortDesc {
+		arrow = "▴"
+	}
+	return " sort: " + sortKeys[m.sortBy] + " " + arrow + " "
+}
+
+// rebuildRows flattens groups into the visible list, applying the sort
+// order and the filter.
 func (m *model) rebuildRows() {
 	var sel row
 	if m.cursor < len(m.rows) {
 		sel = m.rows[m.cursor]
 	}
+	m.sortGroups(m.pd().groups)
 	m.rows = m.rows[:0]
 	f := strings.ToLower(m.filter)
 	if m.mrView {
@@ -884,6 +948,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "A", "shift+a":
 		m.showArchived = !m.showArchived
 		m.rebuildRows()
+	case "s":
+		m.setSort((m.sortBy+1)%len(sortKeys), m.sortDesc)
+	case "S", "shift+s":
+		m.setSort(m.sortBy, !m.sortDesc)
 	case "R", "shift+r":
 		if _, s := m.selected(); s != nil {
 			m.input = s.Title
@@ -911,6 +979,18 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, fetch
 	}
 	return m, nil
+}
+
+// setSort changes the sort key or direction and says so in the status bar.
+func (m *model) setSort(by int, desc bool) {
+	m.sortBy, m.sortDesc = by, desc
+	m.rows, m.cursor, m.offset = m.rows[:0], 0, 0 // start at the top of the new order
+	m.rebuildRows()
+	dir := ""
+	if desc {
+		dir = ", reversed"
+	}
+	m.status = "sorted by " + sortKeys[by] + dir + styleDim.Render("  (s next key, S reverse)")
 }
 
 func (m model) selectedMR() *MR {
@@ -1019,36 +1099,7 @@ func (m model) View() tea.View {
 	// A wrapped input line shrinks the list; keep the cursor row in view.
 	m.clampCursor()
 
-	// Title bar with profile tabs.
-	var tabs []string
-	for i, p := range m.profiles {
-		label := fmt.Sprintf(" %d:%s ", i+1, p)
-		var tab string
-		if i == m.profile {
-			tab = styleTabOn.Render(label)
-		} else {
-			tab = styleTab.Render(label) + m.liveCounts(p)
-		}
-		if m.mrErr[p] != nil {
-			tab += styleErr.Render("mr?")
-		}
-		tabs = append(tabs, tab)
-	}
-	bar := styleTitle.Render(" reserva ") + " " + strings.Join(tabs, " ")
-	if m.mrView {
-		bar += "  " + styleHeaderOn.Render(fmt.Sprintf(" %d open MRs ", len(m.mrs[m.profiles[m.profile]])))
-		if err := m.mrErr[m.profiles[m.profile]]; err != nil {
-			bar += " " + styleErr.Render(err.Error())
-		}
-	}
-	if n := m.archivedTotal(); n > 0 {
-		hint := fmt.Sprintf("%d archived hidden (A shows)", n)
-		if m.showArchived {
-			hint = fmt.Sprintf("showing %d archived (A hides)", n)
-		}
-		bar += "  " + styleDim.Render(hint)
-	}
-	b.WriteString(truncate(bar, w) + "\n")
+	b.WriteString(m.titleBar(w) + "\n")
 	b.WriteString(styleRule.Render(strings.Repeat("─", w)) + "\n")
 
 	switch m.mode {
@@ -1068,6 +1119,42 @@ func (m model) View() tea.View {
 	v.AltScreen = true
 	v.WindowTitle = "reserva"
 	return v
+}
+
+// titleBar renders the profile tabs, notes and the sort label, cut to w.
+func (m model) titleBar(w int) string {
+	bar := styleTitle.Render(" reserva ") + " "
+	for i, p := range m.profiles {
+		label := fmt.Sprintf(" %d:%s ", i+1, p)
+		var tab string
+		if i == m.profile {
+			tab = styleTabOn.Render(label)
+		} else {
+			tab = styleTab.Render(label) + m.liveCounts(p)
+		}
+		if m.mrErr[p] != nil {
+			tab += styleErr.Render("mr?")
+		}
+		bar += tab + " "
+	}
+	if m.mrView {
+		bar += " " + styleHeaderOn.Render(fmt.Sprintf(" %d open MRs ", len(m.mrs[m.profiles[m.profile]])))
+		if err := m.mrErr[m.profiles[m.profile]]; err != nil {
+			bar += " " + styleErr.Render(err.Error())
+		}
+	}
+	if n := m.archivedTotal(); n > 0 {
+		hint := fmt.Sprintf("%d archived hidden (A shows)", n)
+		if m.showArchived {
+			hint = fmt.Sprintf("showing %d archived (A hides)", n)
+		}
+		bar += " " + styleDim.Render(hint)
+	}
+	label := m.sortLabel()
+	if lipgloss.Width(bar)+1+len([]rune(label)) > w {
+		return truncate(bar, w)
+	}
+	return bar + " " + styleTab.Render(label)
 }
 
 func (m model) listView(w int) string {
@@ -1373,6 +1460,7 @@ func (m model) helpView() string {
 		"                  the other keys act on its session",
 		"",
 		"  Other        a  archive/unarchive    A  show archived    R  rename    /  filter",
+		"               s  next sort key (activity, path, name, branch)    S  reverse the order",
 		"               r  reload (and refetch MRs)    ?  help    q  quit",
 		"",
 		"  Marks        ● busy   ● idle   ✗ directory missing   ⎇ worktree   !12 open MR (+n more)",

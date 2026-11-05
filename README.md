@@ -100,6 +100,7 @@ Navigation is vim-style.
 | `a` | archive or unarchive the selected session |
 | `A` | show or hide archived sessions |
 | `/` | filter sessions by title, prompt, branch or path |
+| `s` / `S` | next sort key (activity, path, name, branch) / reverse the order |
 | `m` | toggle the [merge request](#merge-requests) view |
 | `r` | reload (and refetch merge requests) |
 | `?` | help |
@@ -182,6 +183,7 @@ terminal = ""               # defaults to $TERMINAL; e.g. "wezterm start --"
 new_terminal = true         # enter opens a new window; false: enter runs here
 shell = ""                  # defaults to $SHELL
 worktrees = true
+sort = "activity"           # initial order: activity, path, name or branch
 
 [profiles.work]
 config_dir = "~/.claude-work"
@@ -194,6 +196,12 @@ Profiles appear as tabs in the order they are written. Each profile's sessions
 are read from `<config_dir>/projects/*/*.jsonl`; running sessions are detected
 from `<config_dir>/sessions/*.json` and marked with a dot (green busy, yellow
 idle).
+
+The list is sorted by recent activity: the repository with the newest
+session first, newest sessions first within it. `s` cycles through the other
+orders, `path` (repository path, then session directory), `name` (title) and
+`branch`, and `S` reverses the current one; the title bar shows which is on.
+`sort` in the config picks the initial one.
 
 ### Merge requests
 
