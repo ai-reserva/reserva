@@ -190,6 +190,7 @@ new_terminal = true         # enter opens a new window; false: enter runs here
 shell = ""                  # defaults to $SHELL
 worktrees = true
 sort = "activity"           # initial order: activity, path, name or branch
+mouse = false               # clicks select rows, tabs and the sort label
 all_tab = "first"           # the all tab goes before (first) or after (last) the profiles
 
 [profiles.work]
@@ -217,6 +218,11 @@ session first, newest sessions first within it. `s` cycles through the other
 orders, `path` (repository path, then session directory), `name` (title) and
 `branch`, and `S` reverses the current one; the title bar shows which is on.
 `sort` in the config picks the initial one.
+
+With `mouse = true`, a click selects a row, the wheel scrolls, clicking a
+profile tab switches to it and clicking the sort label cycles it (right-click
+reverses). Terminals then need `shift` held to select text, which is why it
+is off by default.
 
 ### Merge requests
 

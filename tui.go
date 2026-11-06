@@ -377,7 +377,7 @@ func (m *model) sortGroups(groups []*Group) {
 	})
 }
 
-// sortLabel is the " sort: <key> ▾" shown in the title bar.
+// sortLabel is the clickable " sort: <key> ▾" shown in the title bar.
 func (m model) sortLabel() string {
 	arrow := "▾"
 	if m.sortDesc {
@@ -915,6 +915,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseClickMsg, tea.MouseWheelMsg:
+		return m.handleMouse(msg)
 	}
 	return m, nil
 }
@@ -1123,6 +1126,50 @@ func (m *model) setSort(by int, desc bool) {
 	m.status = "sorted by " + sortKeys[by] + dir + styleDim.Render("  (s next key, S reverse)")
 }
 
+// handleMouse maps clicks and the wheel onto the keys: a click on the
+// title bar switches the tab or the sort order (right-click reverses it),
+// a click in the list selects the row, the wheel scrolls.
+func (m model) handleMouse(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.mode != modeList {
+		return m, nil
+	}
+	switch msg := msg.(type) {
+	case tea.MouseWheelMsg:
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.move(-3)
+		case tea.MouseWheelDown:
+			m.move(3)
+		}
+	case tea.MouseClickMsg:
+		if msg.Button != tea.MouseLeft && msg.Button != tea.MouseRight {
+			return m, nil
+		}
+		if msg.Y == 0 {
+			_, tabs, sortX := m.titleBar(m.viewWidth())
+			if msg.X >= sortX {
+				if msg.Button == tea.MouseRight {
+					m.setSort(m.sortBy, !m.sortDesc)
+				} else {
+					m.setSort((m.sortBy+1)%len(sortKeys), m.sortDesc)
+				}
+				return m, nil
+			}
+			for i, end := range tabs {
+				if msg.X < end {
+					return m, m.switchProfile(i - m.profile)
+				}
+			}
+			return m, nil
+		}
+		if i := m.offset + msg.Y - 2; msg.Y >= 2 && msg.Y < 2+m.listHeight() && i < len(m.rows) {
+			m.cursor = i
+			m.clampCursor()
+		}
+	}
+	return m, nil
+}
+
 func (m model) selectedMR() *MR {
 	if m.cursor >= len(m.rows) || len(m.rows) == 0 {
 		return nil
@@ -1229,7 +1276,8 @@ func (m model) View() tea.View {
 	// A wrapped input line shrinks the list; keep the cursor row in view.
 	m.clampCursor()
 
-	b.WriteString(m.titleBar(w) + "\n")
+	bar, _, _ := m.titleBar(w)
+	b.WriteString(bar + "\n")
 	b.WriteString(styleRule.Render(strings.Repeat("─", w)) + "\n")
 
 	switch m.mode {
@@ -1248,12 +1296,17 @@ func (m model) View() tea.View {
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	v.WindowTitle = "reserva"
+	if m.cfg.Mouse {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	return v
 }
 
 // titleBar renders the profile tabs, notes and the sort label, cut to w.
-func (m model) titleBar(w int) string {
-	bar := styleTitle.Render(" reserva ") + " "
+// For clicks it also returns the column each tab ends at and the column
+// the sort label starts at.
+func (m model) titleBar(w int) (bar string, tabEnds []int, sortX int) {
+	bar = styleTitle.Render(" reserva ") + " "
 	for i, p := range m.profiles {
 		label := fmt.Sprintf(" %d:%s ", i+1, p)
 		var tab string
@@ -1266,6 +1319,7 @@ func (m model) titleBar(w int) string {
 			tab += styleErr.Render("mr?")
 		}
 		bar += tab + " "
+		tabEnds = append(tabEnds, lipgloss.Width(bar))
 	}
 	if m.mrView {
 		bar += " " + styleHeaderOn.Render(fmt.Sprintf(" %d open MRs ", len(m.currentMRs())))
@@ -1281,10 +1335,11 @@ func (m model) titleBar(w int) string {
 		bar += " " + styleDim.Render(hint)
 	}
 	label := m.sortLabel()
-	if lipgloss.Width(bar)+1+len([]rune(label)) > w {
-		return truncate(bar, w)
+	sortX = lipgloss.Width(bar) + 1
+	if sortX+len([]rune(label)) > w {
+		return truncate(bar, w), tabEnds, w
 	}
-	return bar + " " + styleTab.Render(label)
+	return bar + " " + styleTab.Render(label), tabEnds, sortX
 }
 
 func (m model) listView(w int) string {

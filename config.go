@@ -30,6 +30,7 @@ type Config struct {
 	Worktrees      *bool              `toml:"worktrees"`
 	NewTerminal    *bool              `toml:"new_terminal"`
 	Sort           string             `toml:"sort"`    // initial sort key, one of sortKeys
+	Mouse          bool               `toml:"mouse"`   // react to clicks and the wheel
 	AllTab         string             `toml:"all_tab"` // where the all tab goes: first or last
 	Profiles       map[string]Profile `toml:"profiles"`
 
@@ -278,6 +279,9 @@ func writeDefaultConfig(path string) error {
 	b.WriteString("worktrees = true\n")
 	b.WriteString("\n# Initial sort order: activity, path, name or branch (s cycles, S reverses).\n")
 	b.WriteString("sort = \"activity\"\n")
+	b.WriteString("\n# React to the mouse: click selects, the wheel scrolls, clicking a tab or\n")
+	b.WriteString("# the sort label switches it. Selecting text then needs shift.\n")
+	b.WriteString("mouse = false\n")
 	b.WriteString("\n# With several profiles, the all tab lists every profile's sessions.\n")
 	b.WriteString("# It goes before (first) or after (last) the profiles' own tabs.\n")
 	b.WriteString("all_tab = \"first\"\n")
