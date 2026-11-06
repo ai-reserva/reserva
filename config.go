@@ -28,6 +28,7 @@ type Config struct {
 	Shell          string             `toml:"shell"`
 	Worktrees      *bool              `toml:"worktrees"`
 	NewTerminal    *bool              `toml:"new_terminal"`
+	AllTab         string             `toml:"all_tab"` // where the all tab goes: first or last
 	Profiles       map[string]Profile `toml:"profiles"`
 
 	// ordered profile names, in config file order
@@ -103,6 +104,13 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if cfg.ClaudeBin == "" {
 		cfg.ClaudeBin = "claude"
+	}
+	switch cfg.AllTab {
+	case "":
+		cfg.AllTab = "first"
+	case "first", "last":
+	default:
+		return nil, fmt.Errorf("%s: all_tab must be first or last, not %q", path, cfg.AllTab)
 	}
 	if cfg.Shell == "" {
 		cfg.Shell = os.Getenv("SHELL")
@@ -260,6 +268,9 @@ func writeDefaultConfig(path string) error {
 	b.WriteString("shell = \"\"\n")
 	b.WriteString("\n# New sessions are started in a fresh git worktree (claude --worktree).\n")
 	b.WriteString("worktrees = true\n")
+	b.WriteString("\n# With several profiles, the all tab lists every profile's sessions.\n")
+	b.WriteString("# It goes before (first) or after (last) the profiles' own tabs.\n")
+	b.WriteString("all_tab = \"first\"\n")
 	b.WriteString("\n# One profile per Claude Code config directory (CLAUDE_CONFIG_DIR).\n")
 	b.WriteString("# ~/.claude, ~/.claude-* and claude-swap (cswap) accounts are found\n")
 	b.WriteString("# automatically on first run.\n")

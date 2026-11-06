@@ -188,6 +188,7 @@ terminal = ""               # defaults to $TERMINAL; e.g. "wezterm start --"
 new_terminal = true         # enter opens a new window; false: enter runs here
 shell = ""                  # defaults to $SHELL
 worktrees = true
+all_tab = "first"           # the all tab goes before (first) or after (last) the profiles
 
 [profiles.work]
 config_dir = "~/.claude-work"
@@ -200,6 +201,14 @@ Profiles appear as tabs in the order they are written. Each profile's sessions
 are read from `<config_dir>/projects/*/*.jsonl`; running sessions are detected
 from `<config_dir>/sessions/*.json` and marked with a dot (green busy, yellow
 idle).
+
+With more than one profile, an `all` tab comes first: every profile's
+sessions in one list, each prefixed with its profile name, so `/` filters by
+profile too. `all_tab = "last"` puts it after the
+profiles' own tabs instead, which keep their config order. Resuming a session
+there uses the profile it belongs to; new sessions (`n`, `N`, `enter` on a
+header) start in `default_profile`. reserva opens on `default_profile`'s tab;
+`--profile all` opens the all tab instead.
 
 ### Merge requests
 
