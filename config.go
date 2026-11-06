@@ -29,7 +29,8 @@ type Config struct {
 	Shell          string             `toml:"shell"`
 	Worktrees      *bool              `toml:"worktrees"`
 	NewTerminal    *bool              `toml:"new_terminal"`
-	Sort           string             `toml:"sort"` // initial sort key, one of sortKeys
+	Sort           string             `toml:"sort"`  // initial sort key, one of sortKeys
+	Mouse          bool               `toml:"mouse"` // react to clicks and the wheel
 	Profiles       map[string]Profile `toml:"profiles"`
 
 	// ordered profile names, in config file order
@@ -218,6 +219,9 @@ func writeDefaultConfig(path string) error {
 	b.WriteString("worktrees = true\n")
 	b.WriteString("\n# Initial sort order: activity, path, name or branch (s cycles, S reverses).\n")
 	b.WriteString("sort = \"activity\"\n")
+	b.WriteString("\n# React to the mouse: click selects, the wheel scrolls, clicking a tab or\n")
+	b.WriteString("# the sort label switches it. Selecting text then needs shift.\n")
+	b.WriteString("mouse = false\n")
 	b.WriteString("\n# One profile per Claude Code config directory (CLAUDE_CONFIG_DIR).\n")
 	b.WriteString("# Add forges to a profile to see its open merge requests (m), e.g.\n")
 	b.WriteString("# forges = [{ kind = \"gitlab\", host = \"gitlab.com\" }]\n")
