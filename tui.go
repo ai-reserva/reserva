@@ -38,6 +38,10 @@ func (r row) header() bool { return r.sess == nil && r.mr == nil }
 // unlinkedGroup heads the open MRs that no visible session claims.
 var unlinkedGroup = &Group{}
 
+// allProfile is the name of the tab that shows every profile's sessions
+// together. It exists when there is more than one profile.
+const allProfile = "all"
+
 type profileData struct {
 	groups  []*Group
 	loaded  bool
@@ -140,9 +144,19 @@ func newModel(cfg *Config, startProfile string) model {
 			m.mrs[p] = mrs
 		}
 	}
-	for i, p := range m.profiles {
+	for _, p := range m.profiles {
 		m.data[p] = &profileData{}
 		m.live[p] = loadLive(cfg.Profiles[p].ConfigDir)
+	}
+	if len(m.profiles) > 1 && cfg.Profiles[allProfile].ConfigDir == "" {
+		if cfg.AllTab == "last" {
+			m.profiles = append(m.profiles, allProfile)
+		} else {
+			m.profiles = append([]string{allProfile}, m.profiles...)
+		}
+		m.data[allProfile] = &profileData{}
+	}
+	for i, p := range m.profiles {
 		if p == startProfile {
 			m.profile = i
 		}
@@ -150,16 +164,123 @@ func newModel(cfg *Config, startProfile string) model {
 	return m
 }
 
-func (m model) current() Profile { return m.cfg.Profiles[m.profiles[m.profile]] }
+// all reports whether the combined tab is selected.
+func (m model) all() bool { return m.profiles[m.profile] == allProfile }
+
+// current is the profile new sessions are started in: the selected one, or
+// the default profile on the combined tab.
+func (m model) current() Profile {
+	if m.all() {
+		return m.cfg.Profiles[m.cfg.DefaultProfile]
+	}
+	return m.cfg.Profiles[m.profiles[m.profile]]
+}
+
+// profileOf is the profile a session belongs to, which is what resuming it
+// must use even on the combined tab.
+func (m model) profileOf(s *Session) Profile {
+	if s == nil {
+		return m.current()
+	}
+	return m.cfg.Profiles[s.Profile]
+}
 
 func (m model) pd() *profileData { return m.data[m.profiles[m.profile]] }
 
+// realProfiles are the tabs that are config profiles, without the all tab.
+func (m model) realProfiles() []string {
+	if _, ok := m.data[allProfile]; !ok {
+		return m.profiles
+	}
+	return slices.DeleteFunc(slices.Clone(m.profiles), func(p string) bool { return p == allProfile })
+}
+
 func (m model) loadCmd(name string) tea.Cmd {
+	if name == allProfile {
+		return m.reloadCmd()
+	}
 	p := m.cfg.Profiles[name]
 	return func() tea.Msg {
 		groups, err := loadProfile(p)
 		return loadedMsg{profile: name, groups: groups, err: err}
 	}
+}
+
+// reloadCmd loads the selected profile, or every profile on the all tab,
+// skipping the ones already being loaded.
+func (m model) reloadCmd() tea.Cmd {
+	names := []string{m.profiles[m.profile]}
+	if m.all() {
+		names = m.realProfiles()
+	}
+	var cmds []tea.Cmd
+	for _, name := range names {
+		pd := m.data[name]
+		if pd.loading {
+			continue
+		}
+		pd.loading = true
+		cmds = append(cmds, m.loadCmd(name))
+	}
+	return tea.Batch(cmds...)
+}
+
+// mergeAll rebuilds the all tab from the profiles' groups. Sessions are
+// shared, so live state, MRs and archiving applied per profile show up here
+// too; only the groups are new, since one repository can have sessions in
+// several profiles.
+func (m *model) mergeAll() {
+	pd, ok := m.data[allProfile]
+	if !ok {
+		return
+	}
+	pd.loaded, pd.loading, pd.err = true, false, nil
+	byRepo := map[string]*Group{}
+	for _, name := range m.realProfiles() {
+		src := m.data[name]
+		if !src.loaded {
+			pd.loaded = false
+		}
+		if src.loading {
+			pd.loading = true
+		}
+		if src.err != nil && pd.err == nil {
+			pd.err = src.err
+		}
+		for _, g := range src.groups {
+			dst := byRepo[g.Repo]
+			if dst == nil {
+				dst = &Group{Repo: g.Repo, Project: g.Project}
+				byRepo[g.Repo] = dst
+			}
+			dst.Sessions = append(dst.Sessions, g.Sessions...)
+			if g.Latest.After(dst.Latest) {
+				dst.Latest = g.Latest
+			}
+		}
+	}
+	pd.groups = pd.groups[:0]
+	for _, g := range byRepo {
+		sort.Slice(g.Sessions, func(i, j int) bool {
+			return g.Sessions[i].Modified.After(g.Sessions[j].Modified)
+		})
+		pd.groups = append(pd.groups, g)
+	}
+	sort.Slice(pd.groups, func(i, j int) bool {
+		return pd.groups[i].Latest.After(pd.groups[j].Latest)
+	})
+}
+
+// currentMRs are the open MRs of the selected profile, or of all of them.
+func (m model) currentMRs() []*MR {
+	if !m.all() {
+		return m.mrs[m.profiles[m.profile]]
+	}
+	var out []*MR
+	for _, p := range m.realProfiles() {
+		out = append(out, m.mrs[p]...)
+	}
+	return out
 }
 
 func liveTick() tea.Cmd {
@@ -205,8 +326,7 @@ func (m model) hasForges() bool {
 }
 
 func (m model) Init() tea.Cmd {
-	m.pd().loading = true
-	return tea.Batch(m.loadCmd(m.profiles[m.profile]), liveTick(), rescanTick(), m.fetchAllMRsCmd(), forgeTick())
+	return tea.Batch(m.reloadCmd(), liveTick(), rescanTick(), m.fetchAllMRsCmd(), forgeTick())
 }
 
 // sortKeys are the orders the list can be in: by recent activity (newest
@@ -313,7 +433,7 @@ func sameRow(r, want row) bool {
 		return r.mr != nil && r.mr.URL == want.mr.URL &&
 			(r.sess == nil) == (want.sess == nil) && (r.sess == nil || r.sess.ID == want.sess.ID)
 	case want.sess != nil:
-		return r.mr == nil && r.sess != nil && r.sess.ID == want.sess.ID
+		return r.mr == nil && r.sess != nil && r.sess.ID == want.sess.ID && r.sess.Profile == want.sess.Profile
 	case want.group != nil && want.group.Repo != "":
 		return r.header() && r.group.Repo == want.group.Repo
 	}
@@ -352,7 +472,7 @@ func (m *model) buildMRRows(f string) {
 	}
 	start := len(m.rows)
 	m.rows = append(m.rows, row{group: unlinkedGroup})
-	for _, mr := range m.mrs[m.profiles[m.profile]] {
+	for _, mr := range m.currentMRs() {
 		if !claimed[mr] && (f == "" || mrMatches(mr, f)) {
 			m.rows = append(m.rows, row{group: unlinkedGroup, mr: mr})
 		}
@@ -413,11 +533,17 @@ func (m *model) archivedIn(g *Group) int {
 // tab in the title bar. Empty when nothing is running there.
 func (m model) liveCounts(profile string) string {
 	busy, idle := 0, 0
-	for _, ls := range m.live[profile] {
-		if ls.Status == "busy" {
-			busy++
-		} else {
-			idle++
+	names := []string{profile}
+	if profile == allProfile {
+		names = m.realProfiles()
+	}
+	for _, name := range names {
+		for _, ls := range m.live[name] {
+			if ls.Status == "busy" {
+				busy++
+			} else {
+				idle++
+			}
 		}
 	}
 	var out string
@@ -445,6 +571,7 @@ func matches(s *Session, f string) bool {
 		strings.Contains(strings.ToLower(s.Branch), f) ||
 		strings.Contains(strings.ToLower(s.Repo), f) ||
 		strings.Contains(strings.ToLower(s.Worktree), f) ||
+		strings.Contains(strings.ToLower(s.Profile), f) ||
 		strings.HasPrefix(s.ID, f)
 }
 
@@ -499,10 +626,8 @@ func (m *model) switchProfile(delta int) tea.Cmd {
 	m.profile = ((m.profile+delta)%n + n) % n
 	m.cursor, m.offset = 0, 0
 	m.rebuildRows()
-	pd := m.pd()
-	if !pd.loaded && !pd.loading {
-		pd.loading = true
-		return m.loadCmd(m.profiles[m.profile])
+	if !m.pd().loaded {
+		return m.reloadCmd()
 	}
 	return nil
 }
@@ -516,7 +641,7 @@ func (m model) selected() (*Group, *Session) {
 }
 
 // launch runs argv either inline (pausing the TUI) or in a new terminal.
-func (m *model) launch(dir string, argv []string, newTerm bool) tea.Cmd {
+func (m *model) launch(p Profile, dir string, argv []string, newTerm bool) tea.Cmd {
 	if dir == "" {
 		m.status = styleErr.Render("nothing selected")
 		return nil
@@ -526,14 +651,14 @@ func (m *model) launch(dir string, argv []string, newTerm bool) tea.Cmd {
 		return nil
 	}
 	if newTerm {
-		if err := spawnTerminal(m.cfg, m.current(), dir, argv); err != nil {
+		if err := spawnTerminal(m.cfg, p, dir, argv); err != nil {
 			m.status = styleErr.Render(err.Error())
 			return nil
 		}
 		m.status = "spawned: " + strings.Join(argv, " ") + " in " + shortPath(dir)
 		return nil
 	}
-	cmd, tail := inlineCmd(m.current(), dir, argv)
+	cmd, tail := inlineCmd(p, dir, argv)
 	name := filepath.Base(argv[0])
 	cmdline := strings.Join(argv, " ") + " in " + shortPath(dir)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
@@ -568,7 +693,7 @@ func (m *model) openClaude(newTerm bool) tea.Cmd {
 		}
 		return nil
 	}
-	return m.launch(s.CWD, resumeArgv(m.cfg, s), newTerm)
+	return m.launch(m.profileOf(s), s.CWD, resumeArgv(m.cfg, s), newTerm)
 }
 
 func (m *model) openShell(newTerm bool) tea.Cmd {
@@ -579,7 +704,7 @@ func (m *model) openShell(newTerm bool) tea.Cmd {
 	} else if g != nil {
 		dir = g.Repo
 	}
-	return m.launch(dir, shellArgv(m.cfg), newTerm)
+	return m.launch(m.profileOf(s), dir, shellArgv(m.cfg), newTerm)
 }
 
 // startNew opens the repo prompt for a new session, prefilled with the
@@ -669,7 +794,7 @@ func (m *model) confirmName(newTerm bool) tea.Cmd {
 	m.launchName = strings.ReplaceAll(strings.TrimSpace(m.input), " ", "-")
 	if !m.launchWT {
 		m.mode = modeList
-		return m.launch(m.launchIn, newSessionArgv(m.cfg, m.launchName, false), newTerm)
+		return m.launch(m.current(), m.launchIn, newSessionArgv(m.cfg, m.launchName, false), newTerm)
 	}
 	m.input = ""
 	m.mode = modeBranch
@@ -683,7 +808,7 @@ func (m *model) confirmBranch(newTerm bool) tea.Cmd {
 	branch := strings.TrimSpace(m.input)
 	name := m.launchName
 	if branch == "" {
-		return m.launch(m.launchIn, newSessionArgv(m.cfg, name, true), newTerm)
+		return m.launch(m.current(), m.launchIn, newSessionArgv(m.cfg, name, true), newTerm)
 	}
 	if name == "" {
 		name = strings.ReplaceAll(branch, "/", "-")
@@ -693,7 +818,7 @@ func (m *model) confirmBranch(newTerm bool) tea.Cmd {
 		m.status = styleErr.Render(err.Error())
 		return nil
 	}
-	return m.launch(path, newSessionArgv(m.cfg, name, false), newTerm)
+	return m.launch(m.current(), path, newSessionArgv(m.cfg, name, false), newTerm)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -708,6 +833,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case loadedMsg:
+		// While a tab is still filling (the all tab loads profile by
+		// profile) the cursor stays at the top instead of following the
+		// first session that happened to arrive.
+		wasLoaded := m.pd().loaded
 		pd := m.data[msg.profile]
 		pd.loading = false
 		pd.loaded = true
@@ -717,17 +846,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.archive.apply(pd.groups)
 			applyMRs(pd.groups, m.mrs[msg.profile])
 		}
-		if msg.profile == m.profiles[m.profile] {
+		m.mergeAll()
+		if msg.profile == m.profiles[m.profile] || m.all() {
+			if !wasLoaded {
+				m.rows, m.cursor, m.offset = m.rows[:0], 0, 0
+			}
 			m.rebuildRows()
 		}
 		return m, nil
 
 	case rescanMsg:
 		// Pick up sessions started outside the TUI or in spawned terminals.
-		pd := m.pd()
-		if m.mode == modeList && !pd.loading {
-			pd.loading = true
-			return m, tea.Batch(m.loadCmd(m.profiles[m.profile]), rescanTick())
+		if m.mode == modeList {
+			return m, tea.Batch(m.reloadCmd(), rescanTick())
 		}
 		return m, rescanTick()
 
@@ -749,13 +880,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if pd := m.data[msg.profile]; pd.loaded {
 			applyMRs(pd.groups, msg.mrs)
 		}
-		if msg.profile == m.profiles[m.profile] {
+		if msg.profile == m.profiles[m.profile] || m.all() {
 			m.rebuildRows()
 		}
 		return m, nil
 
 	case liveMsg:
 		for name, pd := range m.data {
+			if name == allProfile {
+				continue
+			}
 			live := loadLive(m.cfg.Profiles[name].ConfigDir)
 			m.live[name] = live
 			if pd.loaded {
@@ -777,9 +911,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = ""
 		}
-		pd := m.pd()
-		pd.loading = true
-		return m, m.loadCmd(m.profiles[m.profile])
+		return m, m.reloadCmd()
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -973,13 +1105,11 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.rebuildRows()
 		}
 	case "r":
-		pd := m.pd()
 		fetch := m.fetchMRsCmd(m.profiles[m.profile])
-		if !pd.loading {
-			pd.loading = true
-			return m, tea.Batch(m.loadCmd(m.profiles[m.profile]), fetch)
+		if m.all() {
+			fetch = m.fetchAllMRsCmd()
 		}
-		return m, fetch
+		return m, tea.Batch(m.reloadCmd(), fetch)
 	}
 	return m, nil
 }
@@ -1192,7 +1322,7 @@ func (m model) titleBar(w int) (bar string, tabEnds []int, sortX int) {
 		tabEnds = append(tabEnds, lipgloss.Width(bar))
 	}
 	if m.mrView {
-		bar += " " + styleHeaderOn.Render(fmt.Sprintf(" %d open MRs ", len(m.mrs[m.profiles[m.profile]])))
+		bar += " " + styleHeaderOn.Render(fmt.Sprintf(" %d open MRs ", len(m.currentMRs())))
 		if err := m.mrErr[m.profiles[m.profile]]; err != nil {
 			bar += " " + styleErr.Render(err.Error())
 		}
@@ -1217,7 +1347,7 @@ func (m model) listView(w int) string {
 	h := m.listHeight()
 	pd := m.pd()
 	if pd.loading && !pd.loaded {
-		b.WriteString(styleDim.Render("  loading sessions from " + shortPath(m.current().ConfigDir) + "…"))
+		b.WriteString(styleDim.Render("  loading sessions from " + m.source() + "…"))
 		b.WriteString(strings.Repeat("\n", h))
 		return b.String()
 	}
@@ -1227,9 +1357,9 @@ func (m model) listView(w int) string {
 		return b.String()
 	}
 	if len(m.rows) == 0 {
-		msg := "  no sessions in " + shortPath(m.current().ConfigDir)
+		msg := "  no sessions in " + m.source()
 		switch {
-		case m.mrView && len(m.current().Forges) == 0:
+		case m.mrView && !m.all() && len(m.current().Forges) == 0:
 			msg = "  no forges configured for this profile (m goes back)"
 		case m.mrView && m.filter != "":
 			msg = "  no open MRs match " + m.filter
@@ -1252,6 +1382,10 @@ func (m model) listView(w int) string {
 	titleW := w - 4 - branchW - timeW - 3
 	if titleW < 10 {
 		titleW = 10
+	}
+	profW := 0
+	for _, p := range m.realProfiles() {
+		profW = max(profW, len(p))
 	}
 	end := m.offset + h
 	if end > len(m.rows) {
@@ -1315,12 +1449,18 @@ func (m model) listView(w int) string {
 				mrMark += fmt.Sprintf("+%d", len(s.MRs)-1)
 			}
 		}
-		tw := titleW
+		// On the all tab, the profile a session belongs to leads its title.
+		prof := ""
+		if m.all() {
+			prof = pad(s.Profile, profW) + " "
+		}
+		tw := titleW - len(prof)
 		if mrMark != "" {
 			tw -= len(mrMark) + 1
 		}
 		title := pad(truncate(titleText, tw), tw)
-		titleStyled := styleRow.Render(title)
+		titleStyled := styleDim.Render(prof) + styleRow.Render(title)
+		title = prof + title
 		if mrMark != "" {
 			title += " " + mrMark
 			titleStyled += " " + styleMR.Render(mrMark)
@@ -1444,7 +1584,15 @@ func (m model) statusView(w int) string {
 	if m.filter != "" {
 		return styleDim.Render(" filter: " + m.filter + "  (esc clears)")
 	}
-	return styleDim.Render(" " + shortPath(m.current().ConfigDir))
+	return styleDim.Render(" " + m.source())
+}
+
+// source names where the selected tab's sessions come from.
+func (m model) source() string {
+	if m.all() {
+		return "all profiles"
+	}
+	return shortPath(m.current().ConfigDir)
 }
 
 func (m model) keysView(w int) string {
@@ -1496,7 +1644,8 @@ func (m model) keysView(w int) string {
 func (m model) helpView() string {
 	lines := []string{
 		"  Navigation   j/k ↑/↓ move   gg/G top/bottom   ctrl+d/u half page   ]/[ next/prev project",
-		"               h/l, 1-9, tab switch profile",
+		"               h/l, 1-9, tab switch profile; the all tab lists every profile's sessions",
+		"               (new sessions there start in " + m.cfg.DefaultProfile + ", the default profile)",
 		"",
 		"  Sessions     enter             resume claude code " + pad(m.where(false), 22) + "(or: o)",
 		"               shift+enter       resume claude code " + pad(m.where(true), 22) + "(or: O)",
