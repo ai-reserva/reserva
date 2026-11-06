@@ -101,6 +101,7 @@ Navigation is vim-style.
 | `a` | archive or unarchive the selected session |
 | `A` | show or hide archived sessions |
 | `/` | filter sessions by title, prompt, branch or path |
+| `s` / `S` | next sort key (activity, path, name, branch) / reverse the order |
 | `m` | toggle the [merge request](#merge-requests) view |
 | `r` | reload (and refetch merge requests) |
 | `?` | help |
@@ -188,6 +189,7 @@ terminal = ""               # defaults to $TERMINAL; e.g. "wezterm start --"
 new_terminal = true         # enter opens a new window; false: enter runs here
 shell = ""                  # defaults to $SHELL
 worktrees = true
+sort = "activity"           # initial order: activity, path, name or branch
 all_tab = "first"           # the all tab goes before (first) or after (last) the profiles
 
 [profiles.work]
@@ -209,6 +211,12 @@ profiles' own tabs instead, which keep their config order. Resuming a session
 there uses the profile it belongs to; new sessions (`n`, `N`, `enter` on a
 header) start in `default_profile`. reserva opens on `default_profile`'s tab;
 `--profile all` opens the all tab instead.
+
+The list is sorted by recent activity: the repository with the newest
+session first, newest sessions first within it. `s` cycles through the other
+orders, `path` (repository path, then session directory), `name` (title) and
+`branch`, and `S` reverses the current one; the title bar shows which is on.
+`sort` in the config picks the initial one.
 
 ### Merge requests
 
