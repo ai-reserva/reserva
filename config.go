@@ -174,14 +174,19 @@ func discoverConfigDirs() []Profile {
 	if len(out) == 0 {
 		out = append(out, Profile{Name: "default", ConfigDir: "~/.claude"})
 	}
-	return append(out, discoverClaudeSwapDirs()...)
+	taken := map[string]bool{}
+	for _, p := range out {
+		taken[p.Name] = true
+	}
+	return append(out, discoverClaudeSwapDirs(taken)...)
 }
 
 // discoverClaudeSwapDirs finds the per-account profiles of claude-swap
 // (cswap), which live in $XDG_DATA_HOME/claude-swap/sessions/<n>-<email>
 // with "@" written as "_". The profile is named after the email's local
-// part, with the account number appended when that is taken.
-func discoverClaudeSwapDirs() []Profile {
+// part, with the account number appended when that is taken (by another
+// account or by one of the profiles in taken, which is updated).
+func discoverClaudeSwapDirs(taken map[string]bool) []Profile {
 	data := os.Getenv("XDG_DATA_HOME")
 	if data == "" {
 		home, _ := os.UserHomeDir()
@@ -190,16 +195,16 @@ func discoverClaudeSwapDirs() []Profile {
 	entries, _ := filepath.Glob(filepath.Join(data, "claude-swap", "sessions", "*-*"))
 	sort.Strings(entries)
 	var out []Profile
-	taken := map[string]bool{"default": true}
 	for _, e := range entries {
 		if _, err := os.Stat(filepath.Join(e, "projects")); err != nil {
 			continue
 		}
 		base := filepath.Base(e)
 		num, email, _ := strings.Cut(base, "-")
-		name, _, _ := strings.Cut(email, "_")
-		if name == "" {
-			name = email
+		// The domain has no "_", the local part may: the last one is the "@".
+		name := email
+		if i := strings.LastIndexByte(email, '_'); i > 0 {
+			name = email[:i]
 		}
 		if taken[name] {
 			name += "-" + num
