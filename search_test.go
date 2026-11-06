@@ -1,10 +1,6 @@
 package main
 
-import (
-	"os"
-	"path/filepath"
-	"testing"
-)
+import "testing"
 
 func TestFuzzyMatch(t *testing.T) {
 	tests := []struct {
@@ -56,22 +52,5 @@ func TestMatches(t *testing.T) {
 		if got := matches(s, tt.filter); got != tt.want {
 			t.Errorf("matches(%q) = %v, want %v", tt.filter, got, tt.want)
 		}
-	}
-}
-
-func TestScanSessions(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name, body string) *Session {
-		path := filepath.Join(dir, name+".jsonl")
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return &Session{ID: name, Path: path}
-	}
-	both := write("both", `{"message":"the Retry logic"}`+"\n"+`{"message":"and a backoff"}`+"\n")
-	one := write("one", `{"message":"retry only"}`+"\n")
-	hits := scanSessions([]*Session{both, one}, []string{"retry", "BACKOFF"})
-	if len(hits) != 1 || hits["both"] == "" {
-		t.Errorf("hits = %v, want only the session that mentions every term", hits)
 	}
 }

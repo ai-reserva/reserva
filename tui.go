@@ -63,13 +63,6 @@ type mrsMsg struct {
 	err     error
 }
 
-type scanMsg struct {
-	profile string
-	filter  string
-	hits    map[string]string
-	took    time.Duration
-}
-
 type execDoneMsg struct {
 	name    string
 	cmdline string
@@ -101,11 +94,6 @@ type model struct {
 
 	archive      *archiveState
 	showArchived bool
-
-	// content search: enter in the filter prompt scans the conversation
-	// files for the filter terms; hits holds a snippet per session ID
-	hits     map[string]string
-	scanning bool
 
 	mrView  bool             // show only sessions with open MRs, MRs nested
 	mrs     map[string][]*MR // open MRs per profile
@@ -192,24 +180,6 @@ func (m model) fetchMRsCmd(name string) tea.Cmd {
 	return func() tea.Msg {
 		mrs, err := fetchOpenMRs(forges)
 		return mrsMsg{profile: name, mrs: mrs, err: err}
-	}
-}
-
-// scanCmd searches the conversation files of the selected profile for the
-// filter terms in the background.
-func (m *model) scanCmd() tea.Cmd {
-	var sessions []*Session
-	for _, g := range m.pd().groups {
-		sessions = append(sessions, g.Sessions...)
-	}
-	terms := filterTerms(m.filter)
-	profile, filter := m.profiles[m.profile], m.filter
-	m.scanning = true
-	m.status = fmt.Sprintf("searching %d conversations for %s…", len(sessions), filter)
-	return func() tea.Msg {
-		start := time.Now()
-		hits := scanSessions(sessions, terms)
-		return scanMsg{profile: profile, filter: filter, hits: hits, took: time.Since(start)}
 	}
 }
 
@@ -302,7 +272,7 @@ func (m *model) buildMRRows(f string) {
 			for _, mr := range s.MRs {
 				claimed[mr] = true
 			}
-			if f != "" && !matches(s, f) && m.hits[s.ID] == "" && !slices.ContainsFunc(s.MRs, func(mr *MR) bool { return mrMatches(mr, f) }) {
+			if f != "" && !matches(s, f) && !slices.ContainsFunc(s.MRs, func(mr *MR) bool { return mrMatches(mr, f) }) {
 				continue
 			}
 			m.rows = append(m.rows, row{group: g, sess: s})
@@ -363,8 +333,8 @@ func matchesText(f string, texts ...string) bool {
 }
 
 func (m *model) buildSessionRows(f string) {
-	// With a filter on, the list is ranked like fzf's: sessions by score
-	// within a project, projects by their best session.
+	// With a filter on, the list is ranked by how well the titles match:
+	// sessions by score within a project, projects by their best session.
 	type block struct {
 		g    *Group
 		keep []*Session
@@ -378,7 +348,7 @@ func (m *model) buildSessionRows(f string) {
 			if s.Archived && !m.showArchived {
 				continue
 			}
-			if f == "" || matches(s, f) || m.hits[s.ID] != "" {
+			if f == "" || matches(s, f) {
 				keep = append(keep, s)
 			}
 		}
@@ -453,8 +423,8 @@ func (m *model) archivedTotal() int {
 }
 
 // matches reports whether every term of the filter fits the session: fuzzy
-// on the title (sahilm/fuzzy's matcher), as a substring of the last prompt, branch,
-// worktree or path, or as a prefix of the ID. Fuzzy matching on long
+// on the title, as a substring of the last prompt, branch, worktree or path,
+// or as a prefix of the ID. Fuzzy matching on long
 // prompts, paths and IDs would let almost any term through.
 func matches(s *Session, f string) bool {
 	for _, term := range filterTerms(f) {
@@ -517,7 +487,6 @@ func (m *model) switchProfile(delta int) tea.Cmd {
 	n := len(m.profiles)
 	m.profile = ((m.profile+delta)%n + n) % n
 	m.cursor, m.offset = 0, 0
-	m.hits = nil // content hits are per profile; enter in / scans again
 	m.rebuildRows()
 	pd := m.pd()
 	if !pd.loaded && !pd.loading {
@@ -784,20 +753,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, liveTick()
 
-	case scanMsg:
-		if msg.profile != m.profiles[m.profile] {
-			return m, nil
-		}
-		m.scanning = false
-		if msg.filter != m.filter { // typed on meanwhile; those hits are stale
-			return m, nil
-		}
-		m.hits = msg.hits
-		m.rebuildRows()
-		m.status = fmt.Sprintf("%d conversations mention %s", len(msg.hits), msg.filter) +
-			styleDim.Render(fmt.Sprintf("  (searched in %.1fs; esc clears)", msg.took.Seconds()))
-		return m, nil
-
 	case execDoneMsg:
 		if msg.err != nil {
 			detail := msg.err.Error()
@@ -836,18 +791,14 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case modeFilter:
 		switch key {
 		case "esc":
-			m.filter, m.input, m.hits = "", "", nil
+			m.filter, m.input = "", ""
 			m.mode = modeList
 			m.rebuildRows()
 		case "enter":
 			m.mode = modeList
-			if m.filter != "" && m.hits == nil {
-				return m, m.scanCmd()
-			}
 		default:
 			m.input = editText(m.input, msg)
 			m.filter = m.input
-			m.hits = nil
 			m.rows, m.cursor, m.offset = m.rows[:0], 0, 0 // cursor on the best match
 			m.rebuildRows()
 		}
@@ -1001,7 +952,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.input = m.filter
 	case "esc":
 		if m.filter != "" {
-			m.filter, m.hits = "", nil
+			m.filter = ""
 			m.rebuildRows()
 		}
 	case "r":
@@ -1391,9 +1342,7 @@ func (m model) statusView(w int) string {
 	_, s := m.selected()
 	if s != nil {
 		detail := shortPath(s.CWD)
-		if hit := m.hits[s.ID]; hit != "" {
-			detail += "  " + styleDim.Render("≈ "+hit)
-		} else if s.LastPrompt != "" && s.LastPrompt != s.Title {
+		if s.LastPrompt != "" && s.LastPrompt != s.Title {
 			detail += "  " + styleDim.Render("› "+s.LastPrompt)
 		}
 		if s.Running {
@@ -1415,7 +1364,7 @@ func (m model) keysView(w int) string {
 	var parts []string
 	switch m.mode {
 	case modeFilter:
-		parts = []string{k("type", "to filter"), k("enter", "also search conversation texts"), k("esc", "clear")}
+		parts = []string{k("type", "to filter"), k("enter", "keep"), k("esc", "clear")}
 	case modeRepo:
 		if len(m.compl) > 0 {
 			return " " + truncate(strings.Join(m.compl, "  "), w-1)
@@ -1478,8 +1427,7 @@ func (m model) helpView() string {
 		"                  the other keys act on its session",
 		"",
 		"  Filter       /  terms (all must match): fuzzy on the title, substring on prompt,",
-		"                  branch, worktree and path; enter searches the conversation texts too",
-		"                  (prompts, replies, tool output), ≈ in the status bar shows the hit",
+		"                  branch, worktree and path, prefix of the session ID",
 		"",
 		"  Other        a  archive/unarchive    A  show archived    R  rename",
 		"               r  reload (and refetch MRs)    ?  help    q  quit",
