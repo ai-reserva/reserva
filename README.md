@@ -182,6 +182,7 @@ terminal = ""               # defaults to $TERMINAL; e.g. "wezterm start --"
 new_terminal = true         # enter opens a new window; false: enter runs here
 shell = ""                  # defaults to $SHELL
 worktrees = true
+all_tab = "first"           # the all tab goes before (first) or after (last) the profiles
 
 [profiles.work]
 config_dir = "~/.claude-work"
@@ -197,9 +198,11 @@ idle).
 
 With more than one profile, an `all` tab comes first and is where reserva
 starts: every profile's sessions in one list, each prefixed with its profile
-name, so `/` filters by profile too. Resuming a session there uses the
-profile it belongs to; new sessions (`n`, `N`, `enter` on a header) start in
-`default_profile`. `--profile <name>` opens a profile's own tab instead.
+name, so `/` filters by profile too. `all_tab = "last"` puts it after the
+profiles' own tabs instead, which keep their config order. Resuming a session
+there uses the profile it belongs to; new sessions (`n`, `N`, `enter` on a
+header) start in `default_profile`. `--profile <name>` opens a profile's own
+tab instead.
 
 ### Merge requests
 

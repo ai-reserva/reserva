@@ -145,8 +145,15 @@ func newModel(cfg *Config, startProfile string) model {
 		m.live[p] = loadLive(cfg.Profiles[p].ConfigDir)
 	}
 	if len(m.profiles) > 1 && cfg.Profiles[allProfile].ConfigDir == "" {
-		m.profiles = append([]string{allProfile}, m.profiles...)
+		if cfg.AllTab == "last" {
+			m.profiles = append(m.profiles, allProfile)
+		} else {
+			m.profiles = append([]string{allProfile}, m.profiles...)
+		}
 		m.data[allProfile] = &profileData{}
+		if startProfile == "" {
+			startProfile = allProfile
+		}
 	}
 	for i, p := range m.profiles {
 		if p == startProfile {
@@ -181,10 +188,10 @@ func (m model) pd() *profileData { return m.data[m.profiles[m.profile]] }
 
 // realProfiles are the tabs that are config profiles, without the all tab.
 func (m model) realProfiles() []string {
-	if m.profiles[0] == allProfile {
-		return m.profiles[1:]
+	if _, ok := m.data[allProfile]; !ok {
+		return m.profiles
 	}
-	return m.profiles
+	return slices.DeleteFunc(slices.Clone(m.profiles), func(p string) bool { return p == allProfile })
 }
 
 func (m model) loadCmd(name string) tea.Cmd {
