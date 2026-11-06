@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -28,6 +29,9 @@ type Config struct {
 	Shell          string             `toml:"shell"`
 	Worktrees      *bool              `toml:"worktrees"`
 	NewTerminal    *bool              `toml:"new_terminal"`
+	Sort           string             `toml:"sort"`    // initial sort key, one of sortKeys
+	Mouse          bool               `toml:"mouse"`   // react to clicks and the wheel
+	AllTab         string             `toml:"all_tab"` // where the all tab goes: first or last
 	Profiles       map[string]Profile `toml:"profiles"`
 
 	// ordered profile names, in config file order
@@ -104,6 +108,19 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.ClaudeBin == "" {
 		cfg.ClaudeBin = "claude"
 	}
+	if cfg.Sort == "" {
+		cfg.Sort = sortKeys[0]
+	}
+	if !slices.Contains(sortKeys, cfg.Sort) {
+		return nil, fmt.Errorf("%s: sort must be one of %s, not %q", path, strings.Join(sortKeys, ", "), cfg.Sort)
+	}
+	switch cfg.AllTab {
+	case "":
+		cfg.AllTab = "first"
+	case "first", "last":
+	default:
+		return nil, fmt.Errorf("%s: all_tab must be first or last, not %q", path, cfg.AllTab)
+	}
 	if cfg.Shell == "" {
 		cfg.Shell = os.Getenv("SHELL")
 		if cfg.Shell == "" {
@@ -174,7 +191,59 @@ func discoverConfigDirs() []Profile {
 	if len(out) == 0 {
 		out = append(out, Profile{Name: "default", ConfigDir: "~/.claude"})
 	}
+	taken := map[string]bool{}
+	for _, p := range out {
+		taken[p.Name] = true
+	}
+	return append(out, discoverClaudeSwapDirs(taken)...)
+}
+
+// discoverClaudeSwapDirs finds the per-account profiles of claude-swap
+// (cswap), which live in $XDG_DATA_HOME/claude-swap/sessions/<n>-<email>
+// with "@" written as "_". The profile is named after the email's local
+// part, with the account number appended when that is taken (by another
+// account or by one of the profiles in taken, which is updated).
+func discoverClaudeSwapDirs(taken map[string]bool) []Profile {
+	data := os.Getenv("XDG_DATA_HOME")
+	if data == "" {
+		home, _ := os.UserHomeDir()
+		data = filepath.Join(home, ".local", "share")
+	}
+	entries, _ := filepath.Glob(filepath.Join(data, "claude-swap", "sessions", "*-*"))
+	sort.Strings(entries)
+	var out []Profile
+	for _, e := range entries {
+		if _, err := os.Stat(filepath.Join(e, "projects")); err != nil {
+			continue
+		}
+		base := filepath.Base(e)
+		num, email, _ := strings.Cut(base, "-")
+		// The domain has no "_", the local part may: the last one is the "@".
+		name := email
+		if i := strings.LastIndexByte(email, '_'); i > 0 {
+			name = email[:i]
+		}
+		if taken[name] {
+			name += "-" + num
+		}
+		taken[name] = true
+		dir := e
+		if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(e, home+"/") {
+			dir = "~" + e[len(home):]
+		}
+		out = append(out, Profile{Name: name, ConfigDir: dir})
+	}
 	return out
+}
+
+// tomlKey quotes a table key unless it is a bare key (A-Za-z0-9_-).
+func tomlKey(name string) string {
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return fmt.Sprintf("%q", name)
+		}
+	}
+	return name
 }
 
 func writeDefaultConfig(path string) error {
@@ -208,11 +277,21 @@ func writeDefaultConfig(path string) error {
 	b.WriteString("shell = \"\"\n")
 	b.WriteString("\n# New sessions are started in a fresh git worktree (claude --worktree).\n")
 	b.WriteString("worktrees = true\n")
+	b.WriteString("\n# Initial sort order: activity, path, name or branch (s cycles, S reverses).\n")
+	b.WriteString("sort = \"activity\"\n")
+	b.WriteString("\n# React to the mouse: click selects, the wheel scrolls, clicking a tab or\n")
+	b.WriteString("# the sort label switches it. Selecting text then needs shift.\n")
+	b.WriteString("mouse = false\n")
+	b.WriteString("\n# With several profiles, the all tab lists every profile's sessions.\n")
+	b.WriteString("# It goes before (first) or after (last) the profiles' own tabs.\n")
+	b.WriteString("all_tab = \"first\"\n")
 	b.WriteString("\n# One profile per Claude Code config directory (CLAUDE_CONFIG_DIR).\n")
+	b.WriteString("# ~/.claude, ~/.claude-* and claude-swap (cswap) accounts are found\n")
+	b.WriteString("# automatically on first run.\n")
 	b.WriteString("# Add forges to a profile to see its open merge requests (m), e.g.\n")
 	b.WriteString("# forges = [{ kind = \"gitlab\", host = \"gitlab.com\" }]\n")
 	for _, p := range profiles {
-		fmt.Fprintf(&b, "\n[profiles.%s]\nconfig_dir = %q\n", p.Name, p.ConfigDir)
+		fmt.Fprintf(&b, "\n[profiles.%s]\nconfig_dir = %q\n", tomlKey(p.Name), p.ConfigDir)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

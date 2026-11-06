@@ -27,8 +27,9 @@ to be sent on. Here they are your Claude sessions.
 
 - Every Claude Code session on your machine, grouped by repository and sorted
   by recent activity, with live busy/idle markers for sessions that are running.
-- Multiple Claude profiles (`~/.claude`, `~/.claude-work`, …) as tabs, each
-  launched with its own `CLAUDE_CONFIG_DIR`.
+- Multiple Claude profiles (`~/.claude`, `~/.claude-work`, …, and
+  [claude-swap](https://github.com/realiti4/claude-swap) accounts) as tabs,
+  each launched with its own `CLAUDE_CONFIG_DIR`.
 - Resume a session or open a shell in its worktree, in the current terminal or
   a new window.
 - Start new sessions in a fresh git worktree, with a branch name of your
@@ -90,6 +91,8 @@ Navigation is vim-style.
 | `j` / `k`, `gg` / `G`, `ctrl+d` / `ctrl+u` | move through the list |
 | `]` / `[` | next / previous project |
 | `h` / `l`, `1`–`9`, `tab` | switch Claude profile |
+| `z` | fold the project under the cursor, or open a folded one a level further |
+| `Z` | fold every project, or open them all when all are folded |
 | `enter` | resume Claude Code in the selected session, in a new terminal window (or focus its window if it is already running) |
 | `shift+enter` | same, in this terminal |
 | `ctrl+enter` | open a shell in the session's worktree, in a new terminal window |
@@ -100,6 +103,7 @@ Navigation is vim-style.
 | `a` | archive or unarchive the selected session |
 | `A` | show or hide archived sessions |
 | `/` | filter sessions by title, prompt, branch or path (see [Search](#search)) |
+| `s` / `S` | next sort key (activity, path, name, branch) / reverse the order |
 | `m` | toggle the [merge request](#merge-requests) view |
 | `r` | reload (and refetch merge requests) |
 | `?` | help |
@@ -184,7 +188,12 @@ started in spawned windows appear on their own; `r` forces it.
 
 `~/.config/reserva/config.toml` (or `$XDG_CONFIG_HOME/reserva/`) is
 created on first run. Profiles are discovered from `~/.claude` and
-`~/.claude-*` directories; each profile is a `CLAUDE_CONFIG_DIR`.
+`~/.claude-*` directories, and from the accounts of
+[claude-swap](https://github.com/realiti4/claude-swap) (`cswap`), which keeps
+one config dir per account under
+`~/.local/share/claude-swap/sessions/<n>-<email>`. Those are named after the
+local part of the email (`georgy` for `georgy@example.com`). Each profile is a
+`CLAUDE_CONFIG_DIR`.
 
 ```toml
 default_profile = "work"
@@ -194,6 +203,9 @@ terminal = ""               # defaults to $TERMINAL; e.g. "wezterm start --"
 new_terminal = true         # enter opens a new window; false: enter runs here
 shell = ""                  # defaults to $SHELL
 worktrees = true
+sort = "activity"           # initial order: activity, path, name or branch
+mouse = false               # clicks select rows, tabs and the sort label
+all_tab = "first"           # the all tab goes before (first) or after (last) the profiles
 
 [profiles.work]
 config_dir = "~/.claude-work"
@@ -206,6 +218,31 @@ Profiles appear as tabs in the order they are written. Each profile's sessions
 are read from `<config_dir>/projects/*/*.jsonl`; running sessions are detected
 from `<config_dir>/sessions/*.json` and marked with a dot (green busy, yellow
 idle).
+
+With more than one profile, an `all` tab comes first: every profile's
+sessions in one list, each prefixed with its profile name, so `/` filters by
+profile too. `all_tab = "last"` puts it after the
+profiles' own tabs instead, which keep their config order. Resuming a session
+there uses the profile it belongs to; new sessions (`n`, `N`, `enter` on a
+header) start in `default_profile`. reserva opens on `default_profile`'s tab;
+`--profile all` opens the all tab instead.
+
+The list is sorted by recent activity: the repository with the newest
+session first, newest sessions first within it. `s` cycles through the other
+orders, `path` (repository path, then session directory), `name` (title) and
+`branch`, and `S` reverses the current one; the title bar shows which is on.
+`sort` in the config picks the initial one.
+
+Projects fold: `z` on a project or one of its sessions hides the sessions
+under the header, marked `[+]`; `z` again opens it one level further, so in
+the [MR view](#merge-requests), which nests MRs under sessions, the sessions
+come back first (`[±]`) and their MRs on the next press (`[-]`). `Z` folds
+every project, or opens them all when everything is folded.
+
+With `mouse = true`, a click selects a row (on a header's `[-]`/`[+]` marker
+it folds or opens the project), the wheel scrolls, clicking a profile tab
+switches to it and clicking the sort label cycles it (right-click reverses). Terminals then need `shift` held to select text, which is why it
+is off by default.
 
 ### Merge requests
 

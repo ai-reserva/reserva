@@ -25,7 +25,7 @@ func main() {
 	}
 	start := cfg.DefaultProfile
 	if *profile != "" {
-		if _, ok := cfg.Profiles[*profile]; !ok {
+		if _, ok := cfg.Profiles[*profile]; !ok && *profile != allProfile {
 			fmt.Fprintf(os.Stderr, "reserva: unknown profile %q\n", *profile)
 			os.Exit(1)
 		}
@@ -45,10 +45,18 @@ func main() {
 }
 
 func printSessions(cfg *Config, profile string) {
-	groups, err := loadProfile(cfg.Profiles[profile])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "reserva:", err)
-		os.Exit(1)
+	names := []string{profile}
+	if profile == allProfile {
+		names = cfg.ProfileNames()
+	}
+	var groups []*Group
+	for _, name := range names {
+		g, err := loadProfile(cfg.Profiles[name])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "reserva:", err)
+			os.Exit(1)
+		}
+		groups = append(groups, g...)
 	}
 	for _, g := range groups {
 		fmt.Println(shortPath(g.Repo))
