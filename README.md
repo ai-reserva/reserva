@@ -102,7 +102,7 @@ Navigation is vim-style.
 | `R` | rename the selected session |
 | `a` | archive or unarchive the selected session |
 | `A` | show or hide archived sessions |
-| `/` | filter sessions by title, prompt, branch or path |
+| `/` | filter sessions by title, prompt, branch or path (see [Search](#search)) |
 | `s` / `S` | next sort key (activity, path, name, branch) / reverse the order |
 | `m` | toggle the [merge request](#merge-requests) view |
 | `r` | reload (and refetch merge requests) |
@@ -145,6 +145,18 @@ On macOS this works for sessions running in Terminal.app. The tab is found
 by the tty of the Claude process and selected through AppleScript, so
 shells and tmux in between do not matter. Other terminals are not
 supported.
+
+## Search
+
+`/` filters the list as you type. The filter is split into terms on spaces
+and every term has to match: fuzzily, with the
+[sahilm/fuzzy](https://github.com/sahilm/fuzzy) matcher, against the
+session's title, or as a plain substring of its last prompt, branch, worktree
+name or path (fuzzy matching on long prompts and paths would let almost
+anything through), or as a prefix of its ID. A term with an upper-case
+letter is matched case-sensitively. With a filter on, the list is ranked by
+how well the titles match.
+
 
 ## Worktrees
 

@@ -472,7 +472,7 @@ func (m *model) rebuildRows() {
 	}
 	m.sortGroups(m.pd().groups)
 	m.rows = m.rows[:0]
-	f := strings.ToLower(m.filter)
+	f := m.filter
 	if m.mrView {
 		m.buildMRRows(f)
 	} else {
@@ -570,13 +570,46 @@ func (m *model) buildMRRows(f string) {
 }
 
 func mrMatches(mr *MR, f string) bool {
-	return strings.Contains(strings.ToLower(mr.Title), f) ||
-		strings.Contains(strings.ToLower(mr.Ref), f) ||
-		strings.Contains(strings.ToLower(mr.Project), f) ||
-		strings.Contains(strings.ToLower(mr.SourceBranch), f)
+	for _, term := range filterTerms(f) {
+		if !fuzzyMatch(mr.Title, term) && !containsFold(term, mr.Ref, mr.Project, mr.SourceBranch) {
+			return false
+		}
+	}
+	return true
+}
+
+// containsFold reports whether one of the texts contains term, ignoring case.
+func containsFold(term string, texts ...string) bool {
+	term = strings.ToLower(term)
+	for _, t := range texts {
+		if strings.Contains(strings.ToLower(t), term) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesText reports whether every term of the filter fuzzy-matches one
+// of the texts.
+func matchesText(f string, texts ...string) bool {
+	for _, term := range filterTerms(f) {
+		if !matchesAny(term, texts...) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *model) buildSessionRows(f string) {
+	// With a filter on, the list is ranked by how well the titles match:
+	// sessions by score within a project, projects by their best session.
+	type block struct {
+		g    *Group
+		keep []*Session
+		n    int
+		best int
+	}
+	var blocks []block
 	for _, g := range m.pd().groups {
 		var keep []*Session
 		for _, s := range g.Sessions {
@@ -588,7 +621,7 @@ func (m *model) buildSessionRows(f string) {
 			}
 		}
 		if len(keep) == 0 && (f != "" || !m.showArchived && m.archivedIn(g) > 0) {
-			if f == "" || !strings.Contains(strings.ToLower(g.Repo), f) {
+			if f == "" || !matchesText(f, shortPath(g.Repo)) {
 				continue
 			}
 		}
@@ -596,12 +629,25 @@ func (m *model) buildSessionRows(f string) {
 		if !m.showArchived {
 			n -= m.archivedIn(g)
 		}
-		m.rows = append(m.rows, row{group: g, n: n})
-		if m.shown(g) == 0 {
+		b := block{g: g, keep: keep, n: n}
+		if f != "" {
+			scores := map[*Session]int{}
+			for _, s := range keep {
+				scores[s] = filterScore(s, f)
+				b.best = max(b.best, scores[s])
+			}
+			sort.SliceStable(keep, func(i, j int) bool { return scores[keep[i]] > scores[keep[j]] })
+		}
+		blocks = append(blocks, b)
+	}
+	sort.SliceStable(blocks, func(i, j int) bool { return blocks[i].best > blocks[j].best })
+	for _, b := range blocks {
+		m.rows = append(m.rows, row{group: b.g, n: b.n})
+		if m.shown(b.g) == 0 {
 			continue
 		}
-		for _, s := range keep {
-			m.rows = append(m.rows, row{group: g, sess: s})
+		for _, s := range b.keep {
+			m.rows = append(m.rows, row{group: b.g, sess: s})
 		}
 	}
 }
@@ -653,14 +699,19 @@ func (m *model) archivedTotal() int {
 	return n
 }
 
+// matches reports whether every term of the filter fits the session: fuzzy
+// on the title, as a substring of the last prompt, branch, worktree or path,
+// or as a prefix of the ID. Fuzzy matching on long
+// prompts, paths and IDs would let almost any term through.
 func matches(s *Session, f string) bool {
-	return strings.Contains(strings.ToLower(s.Title), f) ||
-		strings.Contains(strings.ToLower(s.LastPrompt), f) ||
-		strings.Contains(strings.ToLower(s.Branch), f) ||
-		strings.Contains(strings.ToLower(s.Repo), f) ||
-		strings.Contains(strings.ToLower(s.Worktree), f) ||
-		strings.Contains(strings.ToLower(s.Profile), f) ||
-		strings.HasPrefix(s.ID, f)
+	for _, term := range filterTerms(f) {
+		if !fuzzyMatch(s.Title, term) &&
+			!containsFold(term, s.LastPrompt, s.Branch, s.Worktree, shortPath(s.Repo), s.Profile) &&
+			!strings.HasPrefix(s.ID, term) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *model) listHeight() int {
@@ -1033,6 +1084,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		default:
 			m.input = editText(m.input, msg)
 			m.filter = m.input
+			m.rows, m.cursor, m.offset = m.rows[:0], 0, 0 // cursor on the best match
 			m.rebuildRows()
 		}
 		return m, nil
@@ -1761,7 +1813,10 @@ func (m model) helpView() string {
 		"                  each MR nested under its session; enter opens the MR in the browser,",
 		"                  the other keys act on its session",
 		"",
-		"  Other        a  archive/unarchive    A  show archived    R  rename    /  filter",
+		"  Filter       /  terms (all must match): fuzzy on the title, substring on prompt,",
+		"                  branch, worktree and path, prefix of the session ID",
+		"",
+		"  Other        a  archive/unarchive    A  show archived    R  rename",
 		"               s  next sort key (activity, path, name, branch)    S  reverse the order",
 		"               r  reload (and refetch MRs)    ?  help    q  quit",
 		"",
