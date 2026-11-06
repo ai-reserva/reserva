@@ -23,20 +23,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "reserva:", err)
 		os.Exit(1)
 	}
-	// Without --profile the TUI starts on the all tab (or the only profile)
-	// and --list prints the default profile.
-	start := *profile
-	if start != "" && start != allProfile {
-		if _, ok := cfg.Profiles[start]; !ok {
-			fmt.Fprintf(os.Stderr, "reserva: unknown profile %q\n", start)
+	start := cfg.DefaultProfile
+	if *profile != "" {
+		if _, ok := cfg.Profiles[*profile]; !ok && *profile != allProfile {
+			fmt.Fprintf(os.Stderr, "reserva: unknown profile %q\n", *profile)
 			os.Exit(1)
 		}
+		start = *profile
 	}
 
 	if *list {
-		if start == "" {
-			start = cfg.DefaultProfile
-		}
 		printSessions(cfg, start)
 		return
 	}

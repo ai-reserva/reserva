@@ -24,10 +24,11 @@ func TestAllTabLocation(t *testing.T) {
 		tabs     []string
 		selected string
 	}{
-		{"first", cfg("first", "work", "home"), "", []string{"all", "work", "home"}, "all"},
-		{"last", cfg("last", "work", "home"), "", []string{"work", "home", "all"}, "all"},
+		{"first", cfg("first", "work", "home"), "work", []string{"all", "work", "home"}, "work"},
+		{"last", cfg("last", "work", "home"), "work", []string{"work", "home", "all"}, "work"},
+		{"--profile all", cfg("last", "work", "home"), "all", []string{"work", "home", "all"}, "all"},
 		{"last with --profile", cfg("last", "work", "home"), "home", []string{"work", "home", "all"}, "home"},
-		{"one profile", cfg("last", "work"), "", []string{"work"}, "work"},
+		{"one profile", cfg("last", "work"), "work", []string{"work"}, "work"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

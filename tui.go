@@ -151,9 +151,6 @@ func newModel(cfg *Config, startProfile string) model {
 			m.profiles = append([]string{allProfile}, m.profiles...)
 		}
 		m.data[allProfile] = &profileData{}
-		if startProfile == "" {
-			startProfile = allProfile
-		}
 	}
 	for i, p := range m.profiles {
 		if p == startProfile {
