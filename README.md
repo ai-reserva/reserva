@@ -91,6 +91,8 @@ Navigation is vim-style.
 | `j` / `k`, `gg` / `G`, `ctrl+d` / `ctrl+u` | move through the list |
 | `]` / `[` | next / previous project |
 | `h` / `l`, `1`–`9`, `tab` | switch Claude profile |
+| `z` | fold the project under the cursor, or open a folded one a level further |
+| `Z` | fold every project, or open them all when all are folded |
 | `enter` | resume Claude Code in the selected session, in a new terminal window (or focus its window if it is already running) |
 | `shift+enter` | same, in this terminal |
 | `ctrl+enter` | open a shell in the session's worktree, in a new terminal window |
@@ -219,9 +221,15 @@ orders, `path` (repository path, then session directory), `name` (title) and
 `branch`, and `S` reverses the current one; the title bar shows which is on.
 `sort` in the config picks the initial one.
 
-With `mouse = true`, a click selects a row, the wheel scrolls, clicking a
-profile tab switches to it and clicking the sort label cycles it (right-click
-reverses). Terminals then need `shift` held to select text, which is why it
+Projects fold: `z` on a project or one of its sessions hides the sessions
+under the header, marked `[+]`; `z` again opens it one level further, so in
+the [MR view](#merge-requests), which nests MRs under sessions, the sessions
+come back first (`[±]`) and their MRs on the next press (`[-]`). `Z` folds
+every project, or opens them all when everything is folded.
+
+With `mouse = true`, a click selects a row (on a header's `[-]`/`[+]` marker
+it folds or opens the project), the wheel scrolls, clicking a profile tab
+switches to it and clicking the sort label cycles it (right-click reverses). Terminals then need `shift` held to select text, which is why it
 is off by default.
 
 ### Merge requests

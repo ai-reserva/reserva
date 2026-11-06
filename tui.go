@@ -102,6 +102,11 @@ type model struct {
 	sortBy   int  // index into sortKeys
 	sortDesc bool // reverse the key's natural order
 
+	// depth is how many levels under a project header are shown, keyed by
+	// repository: 0 is folded, absent is fully open. The session list has
+	// one level (sessions), the MR view two (sessions, then their MRs).
+	depth map[string]int
+
 	mrView  bool             // show only sessions with open MRs, MRs nested
 	mrs     map[string][]*MR // open MRs per profile
 	mrErr   map[string]error // last forge error per profile
@@ -138,6 +143,7 @@ func newModel(cfg *Config, startProfile string) model {
 		mrBusy:   map[string]bool{},
 		mrCache:  loadMRCache(defaultMRCachePath()),
 		sortBy:   slices.Index(sortKeys, cfg.Sort),
+		depth:    map[string]int{},
 	}
 	for p, mrs := range m.mrCache.Profiles {
 		if len(cfg.Profiles[p].Forges) > 0 {
@@ -377,6 +383,77 @@ func (m *model) sortGroups(groups []*Group) {
 	})
 }
 
+// maxDepth is how many levels a project can unfold to in the current view.
+func (m model) maxDepth() int {
+	if m.mrView {
+		return 2
+	}
+	return 1
+}
+
+// shown is how many levels of a project are visible.
+func (m model) shown(g *Group) int {
+	if d, ok := m.depth[g.Repo]; ok {
+		return min(d, m.maxDepth())
+	}
+	return m.maxDepth()
+}
+
+// foldMark is the [-] / [+] / [±] marker in front of a project header.
+func (m model) foldMark(g *Group) string {
+	switch d := m.shown(g); {
+	case d == 0:
+		return "[+]"
+	case d < m.maxDepth():
+		return "[±]"
+	}
+	return "[-]"
+}
+
+// toggleFold opens the selected project one level further, or folds it
+// when it is fully open. The cursor moves to the project's header, since
+// the row it was on may disappear.
+func (m *model) toggleFold() {
+	g, _ := m.selected()
+	if g == nil {
+		return
+	}
+	d := m.shown(g) + 1
+	if d > m.maxDepth() {
+		d = 0
+	}
+	m.depth[g.Repo] = d
+	for i := m.cursor; i >= 0; i-- {
+		if m.rows[i].header() && m.rows[i].group == g {
+			m.cursor = i
+			break
+		}
+	}
+	m.rebuildRows()
+}
+
+// anyOpen reports whether some project shows rows under its header.
+func (m model) anyOpen() bool {
+	for _, g := range m.pd().groups {
+		if m.shown(g) > 0 {
+			return true
+		}
+	}
+	return m.shown(unlinkedGroup) > 0 && m.mrView
+}
+
+// foldAll folds every project, or opens all of them.
+func (m *model) foldAll(open bool) {
+	clear(m.depth)
+	if !open {
+		for _, g := range m.pd().groups {
+			m.depth[g.Repo] = 0
+		}
+		m.depth[unlinkedGroup.Repo] = 0
+	}
+	m.rebuildRows()
+}
+
 // sortLabel is the clickable " sort: <key> ▾" shown in the title bar.
 func (m model) sortLabel() string {
 	arrow := "▾"
@@ -458,9 +535,13 @@ func (m *model) buildMRRows(f string) {
 			if f != "" && !matches(s, f) && !slices.ContainsFunc(s.MRs, func(mr *MR) bool { return mrMatches(mr, f) }) {
 				continue
 			}
-			m.rows = append(m.rows, row{group: g, sess: s})
+			if m.shown(g) >= 1 {
+				m.rows = append(m.rows, row{group: g, sess: s})
+			}
 			for _, mr := range s.MRs {
-				m.rows = append(m.rows, row{group: g, sess: s, mr: mr})
+				if m.shown(g) >= 2 {
+					m.rows = append(m.rows, row{group: g, sess: s, mr: mr})
+				}
 				inGroup[mr] = true
 			}
 		}
@@ -472,15 +553,19 @@ func (m *model) buildMRRows(f string) {
 	}
 	start := len(m.rows)
 	m.rows = append(m.rows, row{group: unlinkedGroup})
+	n := 0
 	for _, mr := range m.currentMRs() {
 		if !claimed[mr] && (f == "" || mrMatches(mr, f)) {
-			m.rows = append(m.rows, row{group: unlinkedGroup, mr: mr})
+			n++
+			if m.shown(unlinkedGroup) > 0 {
+				m.rows = append(m.rows, row{group: unlinkedGroup, mr: mr})
+			}
 		}
 	}
-	if len(m.rows) == start+1 {
+	if n == 0 {
 		m.rows = m.rows[:start]
 	} else {
-		m.rows[start].n = len(m.rows) - start - 1
+		m.rows[start].n = n
 	}
 }
 
@@ -512,6 +597,9 @@ func (m *model) buildSessionRows(f string) {
 			n -= m.archivedIn(g)
 		}
 		m.rows = append(m.rows, row{group: g, n: n})
+		if m.shown(g) == 0 {
+			continue
+		}
 		for _, s := range keep {
 			m.rows = append(m.rows, row{group: g, sess: s})
 		}
@@ -1016,6 +1104,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// modeList
 	m.status = ""
 	switch key {
+	case "z":
+		m.toggleFold()
+	case "Z", "shift+z":
+		m.foldAll(!m.anyOpen())
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "?":
@@ -1165,6 +1257,9 @@ func (m model) handleMouse(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if i := m.offset + msg.Y - 2; msg.Y >= 2 && msg.Y < 2+m.listHeight() && i < len(m.rows) {
 			m.cursor = i
 			m.clampCursor()
+			if m.rows[i].header() && msg.X < 5 { // the [-] / [+] marker
+				m.toggleFold()
+			}
 		}
 	}
 	return m, nil
@@ -1395,9 +1490,9 @@ func (m model) listView(w int) string {
 		r := m.rows[i]
 		on := i == m.cursor
 		if r.header() {
-			label := fmt.Sprintf(" %s", shortPath(r.group.Repo))
+			label := fmt.Sprintf(" %s %s", m.foldMark(r.group), shortPath(r.group.Repo))
 			if r.group == unlinkedGroup {
-				label = " open MRs without a session"
+				label = " " + m.foldMark(r.group) + " open MRs without a session"
 			}
 			count := fmt.Sprintf(" %d", r.n)
 			if r.n == 0 {
@@ -1646,6 +1741,9 @@ func (m model) helpView() string {
 		"  Navigation   j/k ↑/↓ move   gg/G top/bottom   ctrl+d/u half page   ]/[ next/prev project",
 		"               h/l, 1-9, tab switch profile; the all tab lists every profile's sessions",
 		"               (new sessions there start in " + m.cfg.DefaultProfile + ", the default profile)",
+		"  Folding      z  fold the project under the cursor, or open it one level further",
+		"                  ([+] folded, [±] partly open, [-] open)",
+		"               Z  fold every project, or open them all when all are folded",
 		"",
 		"  Sessions     enter             resume claude code " + pad(m.where(false), 22) + "(or: o)",
 		"               shift+enter       resume claude code " + pad(m.where(true), 22) + "(or: O)",
