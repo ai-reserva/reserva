@@ -312,6 +312,16 @@ func (m *model) toggleFold() {
 	m.rebuildRows()
 }
 
+// anyOpen reports whether some project shows rows under its header.
+func (m model) anyOpen() bool {
+	for _, g := range m.pd().groups {
+		if m.shown(g) > 0 {
+			return true
+		}
+	}
+	return m.shown(unlinkedGroup) > 0 && m.mrView
+}
+
 // foldAll folds every project, or opens all of them.
 func (m *model) foldAll(open bool) {
 	clear(m.depth)
@@ -961,21 +971,11 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// modeList
 	m.status = ""
-	if prev == "z" {
-		m.lastKey = ""
-		switch key {
-		case "a":
-			m.toggleFold()
-		case "M", "shift+m":
-			m.foldAll(false)
-		case "R", "shift+r":
-			m.foldAll(true)
-		}
-		return m, nil
-	}
 	switch key {
-	case "tab":
+	case "z":
 		m.toggleFold()
+	case "Z", "shift+z":
+		m.foldAll(!m.anyOpen())
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "?":
@@ -1001,9 +1001,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.jumpGroup(1)
 	case "{", "[":
 		m.jumpGroup(-1)
-	case "h", "left":
+	case "h", "left", "shift+tab":
 		return m, m.switchProfile(-1)
-	case "l", "right":
+	case "l", "right", "tab":
 		return m, m.switchProfile(1)
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		i := int(key[0] - '1')
@@ -1591,10 +1591,10 @@ func (m model) keysView(w int) string {
 func (m model) helpView() string {
 	lines := []string{
 		"  Navigation   j/k ↑/↓ move   gg/G top/bottom   ctrl+d/u half page   ]/[ next/prev project",
-		"               h/l, 1-9 switch profile",
-		"  Folding      tab or za  fold the project under the cursor, or open it one level",
-		"                          further ([+] folded, [±] partly open, [-] open)",
-		"               zM / zR    fold / open every project",
+		"               h/l, 1-9, tab switch profile",
+		"  Folding      z  fold the project under the cursor, or open it one level further",
+		"                  ([+] folded, [±] partly open, [-] open)",
+		"               Z  fold every project, or open them all when all are folded",
 		"",
 		"  Sessions     enter             resume claude code " + pad(m.where(false), 22) + "(or: o)",
 		"               shift+enter       resume claude code " + pad(m.where(true), 22) + "(or: O)",
