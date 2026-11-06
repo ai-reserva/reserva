@@ -453,7 +453,7 @@ func (m *model) archivedTotal() int {
 }
 
 // matches reports whether every term of the filter fits the session: fuzzy
-// on the title (fzf's matcher), as a substring of the last prompt, branch,
+// on the title (sahilm/fuzzy's matcher), as a substring of the last prompt, branch,
 // worktree or path, or as a prefix of the ID. Fuzzy matching on long
 // prompts, paths and IDs would let almost any term through.
 func matches(s *Session, f string) bool {

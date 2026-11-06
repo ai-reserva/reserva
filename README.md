@@ -145,11 +145,11 @@ supported.
 ## Search
 
 `/` filters the list as you type. The filter is split into terms on spaces
-and every term has to match: fuzzily, with
-[fzf](https://github.com/junegunn/fzf)'s matcher, against the session's
-title, or as a plain substring of its last prompt, branch, worktree name or
-path (fuzzy matching on long prompts and paths would let almost anything
-through), or as a prefix of its ID. A term with an upper-case letter is
+and every term has to match: fuzzily, with the
+[sahilm/fuzzy](https://github.com/sahilm/fuzzy) matcher, against the
+session's title, or as a plain substring of its last prompt, branch, worktree
+name or path (fuzzy matching on long prompts and paths would let almost
+anything through), or as a prefix of its ID. A term with an upper-case letter is
 matched case-sensitively.
 
 `enter` in the filter prompt then searches the conversation texts too: the
