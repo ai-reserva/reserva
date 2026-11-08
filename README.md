@@ -323,6 +323,7 @@ cache) lives under `~/.local/state/reserva/`.
 | `--profile <name>` | open this profile first |
 | `--config <path>` | use another config file |
 | `--list` | print the sessions and exit |
+| `--help` | print the flags, a short key reference and the config path |
 
 ## macOS notes
 

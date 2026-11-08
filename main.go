@@ -16,6 +16,7 @@ func main() {
 		profile    = flag.String("profile", "", "profile to open first")
 		list       = flag.Bool("list", false, "print sessions and exit")
 	)
+	flag.Usage = usage
 	flag.Parse()
 
 	cfg, err := loadConfig(*configPath)
@@ -72,4 +73,27 @@ func printSessions(cfg *Config, profile string) {
 			fmt.Printf("  %s %-8s %-50s %-20s %s\n", mark, s.ID[:8], truncate(s.Title, 50), truncate(branch, 20), relTime(s.Modified))
 		}
 	}
+}
+
+// usage prints the flags plus a short key reference, so --help is enough to
+// get going without the README.
+func usage() {
+	w := flag.CommandLine.Output()
+	fmt.Fprintln(w, "reserva: a terminal UI for Claude Code sessions across several profiles.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Usage: reserva [--profile <name>|all] [--config <path>] [--list]")
+	fmt.Fprintln(w)
+	flag.PrintDefaults()
+	fmt.Fprint(w, `
+Keys (vim style; ? inside reserva has the full list):
+  j/k  move        ]/[  project       h/l 1-9 tab  profile
+  z/Z  fold        /    filter        s/S          sort
+  enter            resume (shift: here, ctrl: shell)
+  n/N              new session (with/without worktree)
+  a/A  archive     R    rename        m   MR view   r  reload   q  quit
+
+Config: `+defaultConfigPath()+`
+Profiles are Claude config dirs (CLAUDE_CONFIG_DIR); a session is resumed
+with the profile it belongs to. See the README for everything else.
+`)
 }
