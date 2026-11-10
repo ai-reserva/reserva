@@ -23,6 +23,7 @@ const (
 	modeName
 	modeBranch
 	modeRename
+	modeMove
 	modeHelp
 )
 
@@ -219,6 +220,11 @@ func (m model) reloadCmd() tea.Cmd {
 	if m.all() {
 		names = m.realProfiles()
 	}
+	return m.loadNames(names...)
+}
+
+// loadNames loads the named profiles, skipping the ones already loading.
+func (m model) loadNames(names ...string) tea.Cmd {
 	var cmds []tea.Cmd
 	for _, name := range names {
 		pd := m.data[name]
@@ -1139,6 +1145,22 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case modeMove:
+		switch key {
+		case "esc":
+			m.mode = modeList
+			m.compl = nil
+		case "tab":
+			_, s := m.selected()
+			m.input, m.compl = completeName(m.input, m.moveTargets(s))
+		case "enter":
+			return m.confirmMove()
+		default:
+			m.input = editText(m.input, msg)
+			m.compl = nil
+		}
+		return m, nil
+
 	case modeBranch:
 		switch key {
 		case "esc":
@@ -1235,6 +1257,20 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if _, s := m.selected(); s != nil {
 			m.input = s.Title
 			m.mode = modeRename
+		}
+	case "M", "shift+m":
+		if _, s := m.selected(); s != nil {
+			if len(m.moveTargets(s)) == 0 {
+				m.status = "only one profile; add another in " + shortPath(m.cfg.path)
+				return m, nil
+			}
+			if s.Running {
+				m.status = styleErr.Render("running; close it before moving")
+				return m, nil
+			}
+			m.input = ""
+			m.compl = nil
+			m.mode = modeMove
 		}
 	case "n":
 		return m, m.startNew(m.cfg.UseWorktrees())
@@ -1701,6 +1737,9 @@ func (m model) statusView(w int) string {
 		return inputLine(fmt.Sprintf(" %s in %s — name (optional): ", kind, shortPath(m.launchIn)), m.input, w)
 	case modeRename:
 		return inputLine(" rename session: ", m.input, w)
+	case modeMove:
+		_, s := m.selected()
+		return inputLine(fmt.Sprintf(" move %q from %s to profile: ", s.Title, s.Profile), m.input, w)
 	case modeBranch:
 		def := "worktree-<generated>"
 		if m.launchName != "" {
@@ -1763,6 +1802,12 @@ func (m model) keysView(w int) string {
 		parts = []string{k("enter", "start "+m.where(false)), k("shift+enter", "start "+m.where(true)), k("esc", "cancel")}
 	case modeRename:
 		parts = []string{k("enter", "rename"), k("ctrl+u", "clear"), k("esc", "cancel")}
+	case modeMove:
+		if len(m.compl) > 0 {
+			return " " + truncate(strings.Join(m.compl, "  "), w-1)
+		}
+		_, s := m.selected()
+		parts = []string{k("enter", "move"), k("tab", strings.Join(m.moveTargets(s), " / ")), k("esc", "cancel")}
 	case modeHelp:
 		parts = []string{k("esc", "back")}
 	default:
@@ -1817,6 +1862,7 @@ func (m model) helpView() string {
 		"                  branch, worktree and path, prefix of the session ID",
 		"",
 		"  Other        a  archive/unarchive    A  show archived    R  rename",
+		"               M  move the session to another profile (its file changes config dir)",
 		"               s  next sort key (activity, path, name, branch)    S  reverse the order",
 		"               r  reload (and refetch MRs)    ?  help    q  quit",
 		"",
@@ -1837,4 +1883,56 @@ func (m model) helpView() string {
 		lines = lines[:h]
 	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// moveTargets lists the profiles a session can move to: every real profile
+// but its own.
+func (m model) moveTargets(s *Session) []string {
+	var out []string
+	for _, name := range m.realProfiles() {
+		if s == nil || name != s.Profile {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// completeName extends a partially typed name to the unique candidate that
+// starts with it, or returns the candidates that do.
+func completeName(in string, names []string) (string, []string) {
+	var hits []string
+	for _, n := range names {
+		if strings.HasPrefix(n, in) {
+			hits = append(hits, n)
+		}
+	}
+	if len(hits) == 1 {
+		return hits[0], nil
+	}
+	return in, hits
+}
+
+// confirmMove moves the selected session to the profile named in the
+// prompt and reloads both profiles.
+func (m model) confirmMove() (tea.Model, tea.Cmd) {
+	_, s := m.selected()
+	name := strings.TrimSpace(m.input)
+	if s == nil || name == "" {
+		m.mode = modeList
+		m.compl = nil
+		return m, nil
+	}
+	if !slices.Contains(m.moveTargets(s), name) {
+		m.compl = []string{styleErr.Render("no such profile: " + name)}
+		return m, nil
+	}
+	m.mode = modeList
+	m.compl = nil
+	from := s.Profile
+	if err := moveSession(s, m.cfg.Profiles[name]); err != nil {
+		m.status = styleErr.Render("move: " + err.Error())
+		return m, nil
+	}
+	m.status = fmt.Sprintf("moved %s to %s", s.Title, name)
+	return m, m.loadNames(from, name)
 }
