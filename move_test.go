@@ -46,15 +46,30 @@ func TestMoveSession(t *testing.T) {
 	}
 }
 
-func TestCompleteName(t *testing.T) {
-	names := []string{"work", "work-cswap", "personal"}
-	if got, _ := completeName("p", names); got != "personal" {
-		t.Errorf("unique prefix: got %q", got)
+func TestMovePicker(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cfg := &Config{AllTab: "first", Profiles: map[string]Profile{}, order: []string{"work", "work-cswap", "personal"}, DefaultProfile: "work"}
+	for _, n := range cfg.order {
+		cfg.Profiles[n] = Profile{Name: n, ConfigDir: t.TempDir()}
 	}
-	if got, c := completeName("wo", names); got != "wo" || len(c) != 2 {
-		t.Errorf("ambiguous prefix: got %q %v", got, c)
+	m := newModel(cfg, "work")
+	m.mode = modeMove
+	press := func(keys ...string) {
+		for _, k := range keys {
+			next, _ := m.moveKey(k)
+			m = next.(model)
+		}
 	}
-	if _, c := completeName("x", names); len(c) != 0 {
-		t.Errorf("no match: got %v", c)
+	if press("j"); m.movePick != 1 {
+		t.Errorf("j: pick = %d, want 1", m.movePick)
+	}
+	if press("k", "k"); m.movePick != 2 {
+		t.Errorf("k wraps: pick = %d, want 2", m.movePick)
+	}
+	if press("9"); m.movePick != 2 || m.mode != modeMove {
+		t.Errorf("digit past the targets: pick = %d, mode = %v", m.movePick, m.mode)
+	}
+	if press("esc"); m.mode != modeList {
+		t.Errorf("esc: mode = %v, want the list", m.mode)
 	}
 }

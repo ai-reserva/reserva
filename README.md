@@ -112,7 +112,7 @@ Navigation is vim-style.
 | `n` | new session: asks for a repository, then a name (creates a git worktree) |
 | `N` | same, without a worktree |
 | `R` | rename the selected session |
-| `M` | move the selected session to another profile (see [State and writes](#state-and-writes)) |
+| `M` | move the selected session to another profile, picked from a list (see [State and writes](#state-and-writes)) |
 | `a` | archive or unarchive the selected session |
 | `A` | show or hide archived sessions |
 | `/` | filter sessions by title, prompt, branch or path (see [Search](#search)) |
@@ -353,8 +353,8 @@ record Claude Code writes for `/rename` and `--name`, so the new name also
 shows up in Claude's own `/resume` picker. Custom titles take precedence over
 the AI-generated title in the list.
 
-Moving a session (`M`, then the target profile's name; `tab` completes it)
-moves its `.jsonl` file, and the directory of the same name next to it when
+Moving a session (`M`, then the number of the target profile, or `j` / `k` and
+`enter`) moves its `.jsonl` file, and the directory of the same name next to it when
 there is one, into the matching `projects/` directory of the other profile's
 config dir. Claude then resumes it with that profile's login, under the same
 ID. A running session is not moved, and an existing file in the target is
