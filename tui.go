@@ -1837,7 +1837,7 @@ func (m model) keysView(w int) string {
 		default:
 			parts = []string{k("o", "claude"), k("O", "claude "+alt), k("t", "shell"), k("T", "shell "+alt)}
 		}
-		parts = append(parts, k("n", "new"), k("a", "archive"))
+		parts = append(parts, k("n", "new"), k("a", "archive"), k("M", "move"))
 		if m.mrView {
 			parts = append(parts, k("m", "sessions"))
 		} else if m.hasForges() {
