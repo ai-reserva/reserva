@@ -491,7 +491,7 @@ func highlight(text string, terms []string) string {
 			if i+len(t) > len(text) {
 				continue
 			}
-			if s := text[i : i+len(t)]; s == t || !caseSensitive(t) && strings.EqualFold(s, t) {
+			if strings.EqualFold(text[i:i+len(t)], t) {
 				n = max(n, len(t))
 			}
 		}

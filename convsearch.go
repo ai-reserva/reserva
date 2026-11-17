@@ -123,9 +123,9 @@ func resultText(raw json.RawMessage) string {
 	return strings.Join(texts, "\n")
 }
 
-// convQuery is a search: its terms, matched like the filter's (smart
-// case), and the lower-case, JSON-escaped probes that let lines which
-// cannot match be skipped without decoding them.
+// convQuery is a search: its terms, which match ignoring case, and the
+// lower-case, JSON-escaped probes that let lines which cannot match be
+// skipped without decoding them.
 type convQuery struct {
 	terms  []string
 	probes [][]byte
@@ -151,12 +151,10 @@ func (q convQuery) mayMatch(line []byte) bool {
 	return false
 }
 
-// termIn reports whether text contains term, ignoring case unless the term
-// has an upper-case letter.
+// termIn reports whether text contains term, ignoring case. Unlike the
+// filter's terms, upper case does not make a term case-sensitive: names
+// are written in every case in a conversation.
 func termIn(text, term string) bool {
-	if caseSensitive(term) {
-		return strings.Contains(text, term)
-	}
 	return strings.Contains(strings.ToLower(text), strings.ToLower(term))
 }
 

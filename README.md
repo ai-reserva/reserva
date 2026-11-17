@@ -170,8 +170,8 @@ how well the titles match.
 
 `f` searches the conversations themselves: prompts, replies, tool calls and
 their output, but not metadata such as the directory or branch. As you type,
-the sessions of the tab that mention every term (as a plain substring, with
-the same smart case) are listed on the left, those with the most matching
+the sessions of the tab that mention every term (as a plain substring,
+ignoring case) are listed on the left, those with the most matching
 messages first, and the selected one's conversation is previewed on the
 right, at its best match, with the terms highlighted. On terminals narrower
 than 100 columns the preview goes below the list.

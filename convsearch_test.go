@@ -64,7 +64,7 @@ func TestScanConversation(t *testing.T) {
 		{"keepass sync", true, 1, 1}, // both terms in one message
 		{"vault", true, 3, 3},        // reply, tool call and its output
 		{"keepass vault", true, 4, 0},
-		{"Vault", true, 2, 2},    // smart case
+		{"VAULT", true, 3, 3},    // case is ignored
 		{"reserva", false, 0, 0}, // only in the cwd
 		{"main", false, 0, 0},    // only in the branch
 		{"gitea", false, 0, 0},   // sidechain and last-prompt records
