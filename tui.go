@@ -24,6 +24,7 @@ const (
 	modeBranch
 	modeRename
 	modeHelp
+	modeFind
 )
 
 type row struct {
@@ -112,6 +113,8 @@ type model struct {
 	mrErr   map[string]error // last forge error per profile
 	mrBusy  map[string]bool  // a forge fetch is in flight
 	mrCache *mrCache
+
+	find *finder // the conversation picker, from the first f on
 }
 
 var (
@@ -822,6 +825,11 @@ func (m *model) openClaude(newTerm bool) tea.Cmd {
 		}
 		return m.startNew(m.cfg.UseWorktrees())
 	}
+	return m.resume(s, newTerm)
+}
+
+// resume resumes a session, or focuses its window when it is running.
+func (m *model) resume(s *Session, newTerm bool) tea.Cmd {
 	if s.Running {
 		// Resuming again would run two claudes on one conversation; go to
 		// the window it is already running in instead.
@@ -1052,6 +1060,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.reloadCmd()
 
+	case findTickMsg, findHitsMsg, previewMsg:
+		return m.updateFinder(msg)
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
@@ -1072,6 +1083,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeList
 		}
 		return m, nil
+
+	case modeFind:
+		return m.handleFindKey(msg)
 
 	case modeFilter:
 		switch key {
@@ -1243,6 +1257,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		m.mode = modeFilter
 		m.input = m.filter
+	case "f":
+		return m, m.openFinder()
 	case "esc":
 		if m.filter != "" {
 			m.filter = ""
@@ -1430,6 +1446,8 @@ func (m model) View() tea.View {
 	switch m.mode {
 	case modeHelp:
 		b.WriteString(m.helpView())
+	case modeFind:
+		b.WriteString(m.findView(w))
 	default:
 		b.WriteString(m.listView(w))
 	}
@@ -1701,6 +1719,8 @@ func (m model) statusView(w int) string {
 		return inputLine(fmt.Sprintf(" %s in %s — name (optional): ", kind, shortPath(m.launchIn)), m.input, w)
 	case modeRename:
 		return inputLine(" rename session: ", m.input, w)
+	case modeFind:
+		return inputLine(" find in conversations: ", m.input, w)
 	case modeBranch:
 		def := "worktree-<generated>"
 		if m.launchName != "" {
@@ -1765,6 +1785,9 @@ func (m model) keysView(w int) string {
 		parts = []string{k("enter", "rename"), k("ctrl+u", "clear"), k("esc", "cancel")}
 	case modeHelp:
 		parts = []string{k("esc", "back")}
+	case modeFind:
+		parts = []string{k("type", "to search"), k("↑/↓", "session"), k("ctrl+f/b", "next/prev match"),
+			k("enter", "resume "+m.where(false)), k("shift+enter", m.where(true)), k("esc", "back")}
 	default:
 		alt := m.where(true)
 		switch {
@@ -1783,7 +1806,7 @@ func (m model) keysView(w int) string {
 		} else if m.hasForges() {
 			parts = append(parts, k("m", "MRs"))
 		}
-		parts = append(parts, k("h/l", "profile"), k("/", "filter"), k("?", "help"), k("q", "quit"))
+		parts = append(parts, k("h/l", "profile"), k("/", "filter"), k("f", "find"), k("?", "help"), k("q", "quit"))
 	}
 	return " " + truncate(strings.Join(parts, "  "), w-1)
 }
@@ -1818,6 +1841,10 @@ func (m model) helpView() string {
 		"",
 		"  Filter       /  terms (all must match): fuzzy on the title, substring on prompt,",
 		"                  branch, worktree and path, prefix of the session ID",
+		"  Find         f  search the conversations of the tab (prompts, replies, tool calls",
+		"                  and output) for sessions that mention every term; ↑/↓ or ctrl+n/p",
+		"                  pick a session, ctrl+f/b step through its matches in the preview,",
+		"                  enter resumes it, esc goes back",
 		"",
 		"  Other        a  archive/unarchive    A  show archived    R  rename",
 		"               s  next sort key (activity, path, name, branch)    S  reverse the order",
