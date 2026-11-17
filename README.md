@@ -35,6 +35,8 @@ to be sent on. Here they are your Claude sessions.
 - Start new sessions in a fresh git worktree, with a branch name of your
   choosing.
 - Rename, archive and filter sessions.
+- Search inside the conversations, with a preview of the matches in context
+  (see [Search](#search)).
 - Optionally, the open merge requests on GitLab, GitHub or Gitea that belong
   to each session (see [Merge requests](#merge-requests)).
 - Reads Claude's files; the only write is a rename record (see
@@ -113,6 +115,7 @@ Navigation is vim-style.
 | `a` | archive or unarchive the selected session |
 | `A` | show or hide archived sessions |
 | `/` | filter sessions by title, prompt, branch or path (see [Search](#search)) |
+| `f` | search the conversations themselves, with a preview of the matches (see [Search](#search)) |
 | `s` / `S` | next sort key (activity, path, name, branch) / reverse the order |
 | `m` | toggle the [merge request](#merge-requests) view |
 | `r` | reload (and refetch merge requests) |
@@ -166,6 +169,31 @@ name or path (fuzzy matching on long prompts and paths would let almost
 anything through), or as a prefix of its ID. A term with an upper-case
 letter is matched case-sensitively. With a filter on, the list is ranked by
 how well the titles match.
+
+`f` searches the conversations themselves: prompts, replies, tool calls and
+their output, but not metadata such as the directory or branch. As you type,
+the sessions of the tab that mention every term (as a plain substring,
+ignoring case) are listed on the left, those with the most matching
+messages first, and the selected one's conversation is previewed on the
+right, at its best match, with the terms highlighted. On terminals narrower
+than 100 columns the preview goes below the list.
+
+Like in telescope, typing searches, and `esc` switches to a normal mode
+where the keys navigate instead:
+
+| key | action |
+|-----|--------|
+| `↑` / `↓`, `ctrl+p` / `ctrl+n` | previous / next session |
+| `ctrl+f` / `ctrl+b` | next / previous match in the preview |
+| `enter` / `shift+enter` | resume the session, like in the list |
+| `esc` | switch to normal mode |
+| normal mode: `j` / `k`, `gg` / `G` | next / previous session, first / last |
+| normal mode: `n` / `N` | next / previous match in the preview |
+| normal mode: `i`, `a` or `/` | back to typing |
+| normal mode: `esc` or `q` | back to the list (`f` again searches anew for the same terms) |
+
+There is no index: every search reads the session files again, in
+parallel, skipping lines that cannot match without decoding them.
 
 
 ## Worktrees

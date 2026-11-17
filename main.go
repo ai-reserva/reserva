@@ -88,6 +88,7 @@ func usage() {
 Keys (vim style; ? inside reserva has the full list):
   j/k  move        ]/[  project       h/l 1-9 tab  profile
   z/Z  fold        /    filter        s/S          sort
+  f                  find in the conversations, with a preview
   enter/shift+enter  resume in a new terminal or here (see new_terminal)
   ctrl+enter         shell in the session's worktree
   n/N                new session with or without a worktree (see worktrees)
