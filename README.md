@@ -176,12 +176,19 @@ messages first, and the selected one's conversation is previewed on the
 right, at its best match, with the terms highlighted. On terminals narrower
 than 100 columns the preview goes below the list.
 
+Like in telescope, typing searches, and `esc` switches to a normal mode
+where the keys navigate instead:
+
 | key | action |
 |-----|--------|
 | `↑` / `↓`, `ctrl+p` / `ctrl+n` | previous / next session |
 | `ctrl+f` / `ctrl+b` | next / previous match in the preview |
 | `enter` / `shift+enter` | resume the session, like in the list |
-| `esc` | back to the list (`f` again searches anew for the same terms) |
+| `esc` | switch to normal mode |
+| normal mode: `j` / `k`, `gg` / `G` | next / previous session, first / last |
+| normal mode: `n` / `N` | next / previous match in the preview |
+| normal mode: `i`, `a` or `/` | back to typing |
+| normal mode: `esc` or `q` | back to the list (`f` again searches anew for the same terms) |
 
 There is no index: every search reads the session files again, in
 parallel, skipping lines that cannot match without decoding them.

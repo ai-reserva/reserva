@@ -1086,7 +1086,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case modeFind:
-		return m.handleFindKey(msg)
+		return m.handleFindKey(msg, prev)
 
 	case modeFilter:
 		switch key {
@@ -1721,6 +1721,9 @@ func (m model) statusView(w int) string {
 	case modeRename:
 		return inputLine(" rename session: ", m.input, w)
 	case modeFind:
+		if m.find.normal {
+			return ansi.Wrap(" find in conversations: "+m.input+"  "+styleDim.Render("NORMAL"), w, "-/")
+		}
 		return inputLine(" find in conversations: ", m.input, w)
 	case modeBranch:
 		def := "worktree-<generated>"
@@ -1787,8 +1790,13 @@ func (m model) keysView(w int) string {
 	case modeHelp:
 		parts = []string{k("esc", "back")}
 	case modeFind:
-		parts = []string{k("type", "to search"), k("↑/↓", "session"), k("ctrl+f/b", "next/prev match"),
-			k("enter", "resume "+m.where(false)), k("shift+enter", m.where(true)), k("esc", "back")}
+		if m.find.normal {
+			parts = []string{k("j/k", "session"), k("n/N", "next/prev match"), k("enter", "resume "+m.where(false)),
+				k("shift+enter", m.where(true)), k("i", "search"), k("esc", "back")}
+		} else {
+			parts = []string{k("type", "to search"), k("↑/↓", "session"), k("ctrl+f/b", "next/prev match"),
+				k("enter", "resume "+m.where(false)), k("shift+enter", m.where(true)), k("esc", "normal mode")}
+		}
 	default:
 		alt := m.where(true)
 		switch {
@@ -1845,7 +1853,8 @@ func (m model) helpView() string {
 		"  Find         f  search the conversations of the tab (prompts, replies, tool calls",
 		"                  and output) for sessions that mention every term; ↑/↓ or ctrl+n/p",
 		"                  pick a session, ctrl+f/b step through its matches in the preview,",
-		"                  enter resumes it, esc goes back",
+		"                  enter resumes it; esc switches to normal mode: j/k, gg/G pick a",
+		"                  session, n/N step through the matches, i types again, esc goes back",
 		"",
 		"  Other        a  archive/unarchive    A  show archived    R  rename",
 		"               s  next sort key (activity, path, name, branch)    S  reverse the order",

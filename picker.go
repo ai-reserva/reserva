@@ -29,6 +29,7 @@ type finder struct {
 	cursor  int
 	offset  int
 	moved   bool // the cursor was moved since the search started
+	normal  bool // keys navigate instead of typing, like telescope's normal mode
 	preview *convPreview
 }
 
@@ -68,6 +69,7 @@ func (m *model) openFinder() tea.Cmd {
 	}
 	m.mode = modeFind
 	m.input = m.find.query
+	m.find.normal = false
 	// Sessions may have changed since the last search, so it runs again.
 	return m.startSearch()
 }
@@ -242,12 +244,13 @@ func (m model) updateFinder(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleFindKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+// handleFindKey handles a key in the picker. Typing searches; esc
+// switches to normal mode, where j/k, gg/G and n/N navigate like in
+// telescope, i, a or / go back to typing and esc or q close the picker.
+func (m model) handleFindKey(msg tea.KeyPressMsg, prev string) (tea.Model, tea.Cmd) {
 	f := m.find
-	switch key := msg.String(); key {
-	case "esc":
-		m.closeFinder()
-		return m, nil
+	key := msg.String()
+	switch key {
 	case "enter", "shift+enter", "alt+enter":
 		s := f.selected()
 		if s == nil {
@@ -263,16 +266,20 @@ func (m model) handleFindKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		f.cursor, f.moved = f.cursor+m.findListHeight(), true
 	case "pgup":
 		f.cursor, f.moved = f.cursor-m.findListHeight(), true
-	case "ctrl+f", "ctrl+b":
-		if p := f.preview; p != nil && len(p.matches) > 0 {
-			d := 1
-			if key == "ctrl+b" {
-				d = -1
-			}
-			p.cur = (p.cur + d + len(p.matches)) % len(p.matches)
-		}
+	case "ctrl+f":
+		f.stepMatch(1)
+		return m, nil
+	case "ctrl+b":
+		f.stepMatch(-1)
 		return m, nil
 	default:
+		if f.normal {
+			return m.handleFindNormal(key, prev)
+		}
+		if key == "esc" {
+			f.normal = true
+			return m, nil
+		}
 		input := editText(m.input, msg)
 		if input == m.input {
 			return m, nil
@@ -286,6 +293,48 @@ func (m model) handleFindKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.clampFind()
 	return m, m.previewCmd()
+}
+
+func (m model) handleFindNormal(key, prev string) (tea.Model, tea.Cmd) {
+	f := m.find
+	switch key {
+	case "esc", "q":
+		m.closeFinder()
+		return m, nil
+	case "i", "a", "/":
+		f.normal = false
+		return m, nil
+	case "j":
+		f.cursor, f.moved = f.cursor+1, true
+	case "k":
+		f.cursor, f.moved = f.cursor-1, true
+	case "G", "shift+g", "end":
+		f.cursor, f.moved = len(f.hits)-1, true
+	case "g", "home":
+		if key == "g" && prev != "g" {
+			return m, nil
+		}
+		f.cursor, f.moved = 0, true
+		m.lastKey = ""
+	case "n":
+		f.stepMatch(1)
+		return m, nil
+	case "N", "shift+n":
+		f.stepMatch(-1)
+		return m, nil
+	default:
+		return m, nil
+	}
+	m.clampFind()
+	return m, m.previewCmd()
+}
+
+// stepMatch moves the preview to the next (d = 1) or previous (d = -1)
+// match, wrapping around.
+func (f *finder) stepMatch(d int) {
+	if p := f.preview; p != nil && len(p.matches) > 0 {
+		p.cur = (p.cur + d + len(p.matches)) % len(p.matches)
+	}
 }
 
 // findSplit reports whether the preview goes beside the list rather than
@@ -397,7 +446,11 @@ func (f *finder) previewLines(w, h int) []string {
 		out = append(out, styleDim.Render("no message mentions the terms"))
 	default:
 		terms := filterTerms(p.query)
-		out = append(out, styleDim.Render(fmt.Sprintf("match %d of %d  (ctrl+f/b next/previous)", p.cur+1, len(p.matches))))
+		next := "ctrl+f/b"
+		if f.normal {
+			next = "n/N"
+		}
+		out = append(out, styleDim.Render(fmt.Sprintf("match %d of %d  (%s next/previous)", p.cur+1, len(p.matches), next)))
 		at := p.matches[p.cur]
 		// One message of context before the match, a few lines of it.
 		if at > 0 {
