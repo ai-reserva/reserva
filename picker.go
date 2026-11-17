@@ -482,7 +482,7 @@ func anyTermIn(text string, terms []string) bool {
 	return false
 }
 
-// highlight renders the terms in text in bold, matched like termIn.
+// highlight marks the terms in text, matched like termIn.
 func highlight(text string, terms []string) string {
 	var b strings.Builder
 	for i := 0; i < len(text); {
@@ -500,7 +500,7 @@ func highlight(text string, terms []string) string {
 			i++
 			continue
 		}
-		b.WriteString(styleKey.Render(text[i : i+n]))
+		b.WriteString(styleMatch.Render(text[i : i+n]))
 		i += n
 	}
 	return b.String()

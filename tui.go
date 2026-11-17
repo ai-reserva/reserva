@@ -132,6 +132,7 @@ var (
 	styleKey      = lipgloss.NewStyle().Bold(true)
 	styleRule     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	styleMR       = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
+	styleMatch    = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("3")) // like vim's search highlight
 )
 
 func newModel(cfg *Config, startProfile string) model {
