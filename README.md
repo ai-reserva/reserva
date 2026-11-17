@@ -35,6 +35,8 @@ to be sent on. Here they are your Claude sessions.
 - Start new sessions in a fresh git worktree, with a branch name of your
   choosing.
 - Rename, archive and filter sessions.
+- Search inside the conversations, with a preview of the matches in context
+  (see [Search](#search)).
 - Optionally, the open merge requests on GitLab, GitHub or Gitea that belong
   to each session (see [Merge requests](#merge-requests)).
 - Reads Claude's files; the only write is a rename record (see
