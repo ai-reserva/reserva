@@ -23,6 +23,7 @@ const (
 	modeName
 	modeBranch
 	modeRename
+	modeMove
 	modeHelp
 	modeFind
 )
@@ -96,6 +97,7 @@ type model struct {
 	launchName string   // pending new-session: worktree / session name
 	kbOK       bool     // terminal reports shift+enter / ctrl+enter
 	compl      []string // completion candidates shown in the repo prompt
+	movePick   int      // highlighted target in the move picker
 
 	archive      *archiveState
 	showArchived bool
@@ -223,6 +225,11 @@ func (m model) reloadCmd() tea.Cmd {
 	if m.all() {
 		names = m.realProfiles()
 	}
+	return m.loadNames(names...)
+}
+
+// loadNames loads the named profiles, skipping the ones already loading.
+func (m model) loadNames(names ...string) tea.Cmd {
 	var cmds []tea.Cmd
 	for _, name := range names {
 		pd := m.data[name]
@@ -1154,6 +1161,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case modeMove:
+		return m.moveKey(key)
+
 	case modeBranch:
 		switch key {
 		case "esc":
@@ -1250,6 +1260,19 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if _, s := m.selected(); s != nil {
 			m.input = s.Title
 			m.mode = modeRename
+		}
+	case "M", "shift+m":
+		if _, s := m.selected(); s != nil {
+			if len(m.moveTargets(s)) == 0 {
+				m.status = "only one profile; add another in " + shortPath(m.cfg.path)
+				return m, nil
+			}
+			if s.Running {
+				m.status = styleErr.Render("running; close it before moving")
+				return m, nil
+			}
+			m.movePick = 0
+			m.mode = modeMove
 		}
 	case "n":
 		return m, m.startNew(m.cfg.UseWorktrees())
@@ -1725,6 +1748,8 @@ func (m model) statusView(w int) string {
 			return ansi.Wrap(" find in conversations: "+m.input+"  "+styleDim.Render("NORMAL"), w, "-/")
 		}
 		return inputLine(" find in conversations: ", m.input, w)
+	case modeMove:
+		return m.moveView(w)
 	case modeBranch:
 		def := "worktree-<generated>"
 		if m.launchName != "" {
@@ -1787,6 +1812,9 @@ func (m model) keysView(w int) string {
 		parts = []string{k("enter", "start "+m.where(false)), k("shift+enter", "start "+m.where(true)), k("esc", "cancel")}
 	case modeRename:
 		parts = []string{k("enter", "rename"), k("ctrl+u", "clear"), k("esc", "cancel")}
+	case modeMove:
+		_, s := m.selected()
+		parts = []string{k(fmt.Sprintf("1-%d", len(m.moveTargets(s))), "move to that profile"), k("j/k", "choose"), k("enter", "move"), k("esc", "cancel")}
 	case modeHelp:
 		parts = []string{k("esc", "back")}
 	case modeFind:
@@ -1809,7 +1837,7 @@ func (m model) keysView(w int) string {
 		default:
 			parts = []string{k("o", "claude"), k("O", "claude "+alt), k("t", "shell"), k("T", "shell "+alt)}
 		}
-		parts = append(parts, k("n", "new"), k("a", "archive"))
+		parts = append(parts, k("n", "new"), k("a", "archive"), k("M", "move"))
 		if m.mrView {
 			parts = append(parts, k("m", "sessions"))
 		} else if m.hasForges() {
@@ -1857,6 +1885,7 @@ func (m model) helpView() string {
 		"                  session, n/N step through the matches, i types again, esc goes back",
 		"",
 		"  Other        a  archive/unarchive    A  show archived    R  rename",
+		"               M  move the session to another profile (its file changes config dir)",
 		"               s  next sort key (activity, path, name, branch)    S  reverse the order",
 		"               r  reload (and refetch MRs)    ?  help    q  quit",
 		"",
@@ -1877,4 +1906,74 @@ func (m model) helpView() string {
 		lines = lines[:h]
 	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// moveTargets lists the profiles a session can move to: every real profile
+// but its own.
+func (m model) moveTargets(s *Session) []string {
+	var out []string
+	for _, name := range m.realProfiles() {
+		if s == nil || name != s.Profile {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// moveKey handles a key in the move picker: a digit moves the session to
+// the target with that number, j/k and the arrows change the highlighted
+// target, enter moves the session to it.
+func (m model) moveKey(key string) (tea.Model, tea.Cmd) {
+	_, s := m.selected()
+	n := len(m.moveTargets(s))
+	switch key {
+	case "esc", "q":
+		m.mode = modeList
+	case "j", "l", "down", "right", "tab":
+		m.movePick = (m.movePick + 1) % n
+	case "k", "h", "up", "left", "shift+tab":
+		m.movePick = (m.movePick + n - 1) % n
+	case "enter":
+		return m.confirmMove()
+	default:
+		if len(key) == 1 && key[0] >= '1' && int(key[0]-'1') < n {
+			m.movePick = int(key[0] - '1')
+			return m.confirmMove()
+		}
+	}
+	return m, nil
+}
+
+// moveView is the picker line: the session and its numbered targets, the
+// highlighted one in reverse.
+func (m model) moveView(w int) string {
+	_, s := m.selected()
+	line := fmt.Sprintf(" move %q from %s to: ", truncate(s.Title, 40), s.Profile)
+	for i, name := range m.moveTargets(s) {
+		label := fmt.Sprintf(" %d:%s ", i+1, name)
+		if i == m.movePick {
+			label = styleTabOn.Render(label)
+		}
+		line += label + " "
+	}
+	return truncate(line, w)
+}
+
+// confirmMove moves the selected session to the profile highlighted in
+// the picker and reloads both profiles.
+func (m model) confirmMove() (tea.Model, tea.Cmd) {
+	_, s := m.selected()
+	targets := m.moveTargets(s)
+	m.mode = modeList
+	if s == nil || m.movePick >= len(targets) {
+		return m, nil
+	}
+	name := targets[m.movePick]
+	from := s.Profile
+	if err := moveSession(s, m.cfg.Profiles[name]); err != nil {
+		m.status = styleErr.Render("move: " + err.Error())
+		return m, nil
+	}
+	m.status = fmt.Sprintf("moved %s to %s", s.Title, name)
+	return m, m.loadNames(from, name)
 }
